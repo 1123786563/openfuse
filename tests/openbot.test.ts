@@ -395,3 +395,12 @@ test("a runtime 404 is empty only while an unstarted Channel is still accessible
   revokeOnHistory = true;
   await assert.rejects(adapter.openConversation(listed.channelId), { code: "refused" });
 });
+
+test("lists the signed-in account's visible Bots from the default agents endpoint", async () => {
+  const { adapter } = fixture((path, init) => {
+    assert.equal(path, "/api/agents");
+    assert.equal(init.method, "GET");
+    return Response.json({ agents: [{ id: "bot-7", name: "Research", description: "Notes" }] });
+  });
+  assert.deepEqual(await adapter.listBots(), [{ id: "bot-7", name: "Research" }]);
+});

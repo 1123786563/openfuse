@@ -3,6 +3,7 @@ import { ActivityIndicator, FlatList, ScrollView, Text, View } from "react-nativ
 import type { OpenBotTransport } from "../../../packages/backends/src/openbot";
 import { OpenBotAdapter, OpenBotError } from "../../../packages/backends/src/openbot";
 import { AssistantResponse } from "./assistant-response";
+import { OpenBotBotPicker } from "./openbot-bot-picker";
 import { Button, colors, ErrorNotice, s } from "./ui";
 
 type Page = Awaited<ReturnType<OpenBotAdapter["listConversations"]>>;
@@ -26,6 +27,8 @@ export function OpenBotConversations({
   const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [accessLost, setAccessLost] = useState(false);
+  const [choosingBot, setChoosingBot] = useState(false);
+  const [reconciled, setReconciled] = useState(false);
   const pending = useRef<AbortController | null>(null);
 
   const loadPage = useCallback(
@@ -96,6 +99,34 @@ export function OpenBotConversations({
     );
   }
 
+  if (choosingBot) {
+    return (
+      <OpenBotBotPicker
+        adapter={adapter}
+        onBack={() => setChoosingBot(false)}
+        onCreated={(conversation) => {
+          pending.current?.abort();
+          pending.current = null;
+          setChoosingBot(false);
+          setAccessLost(false);
+          setReconciled(false);
+          setSelected(conversation);
+          void loadPage();
+        }}
+        onReconciled={(refreshedPage) => {
+          pending.current?.abort();
+          pending.current = null;
+          setPage(refreshedPage);
+          setStatus("ready");
+          setChoosingBot(false);
+          setAccessLost(false);
+          setReconciled(true);
+        }}
+        onSessionExpired={onSessionExpired}
+      />
+    );
+  }
+
   return (
     <FlatList
       style={{ flex: 1 }}
@@ -117,6 +148,15 @@ export function OpenBotConversations({
           <Text accessibilityRole="header" style={s.heading}>
             Conversations
           </Text>
+          <Button primary onPress={() => setChoosingBot(true)}>
+            New conversation
+          </Button>
+          {reconciled && (
+            <Text accessibilityLiveRegion="polite" style={s.muted}>
+              The conversation may have been created. Check the refreshed list before starting
+              another.
+            </Text>
+          )}
           {accessLost && <ErrorNotice error="You can no longer access this conversation." />}
         </View>
       }

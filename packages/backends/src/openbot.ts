@@ -82,9 +82,6 @@ const navigationSchema = z.object({
   truncated: z.boolean(),
   elapsedMs: z.number().nonnegative(),
 });
-const channelSchema = z.object({
-  channel: z.object({ id: nonempty, threadId: nonempty, agentIds: z.array(nonempty).min(1) }),
-});
 const channelListEntry = z.object({
   id: nonempty.brand<"OpenBotChannelId">(),
   name: nonempty,
@@ -92,6 +89,15 @@ const channelListEntry = z.object({
   agentIds: z.array(nonempty),
   summary: z.string().nullish(),
   opening: z.string().nullish(),
+});
+const botRoster = z.object({
+  agents: z.array(z.object({ id: nonempty.brand<"OpenBotAgentId">(), name: nonempty })),
+});
+const channelSchema = z.object({
+  channel: channelListEntry.pick({ id: true }).extend({
+    threadId: nonempty.brand<"OpenBotThreadId">(),
+    agentIds: z.array(nonempty).min(1),
+  }),
 });
 const channelPage = z.object({
   channels: z.array(channelListEntry),
@@ -191,6 +197,11 @@ export class OpenBotAdapter {
       if (error.code === "authentication_required") return { state: "authentication_required" };
       return { state: "unavailable", reason: error.message };
     }
+  }
+
+  async listBots(signal?: AbortSignal) {
+    const { agents } = await this.json("/api/agents", botRoster, { signal });
+    return agents;
   }
 
   async listConversations({ cursor, signal }: { cursor?: string; signal?: AbortSignal }) {
