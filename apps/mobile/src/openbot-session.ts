@@ -105,7 +105,7 @@ export function createOpenBotSession({
         const allowed =
           ((!init.method || init.method === "GET") && url.pathname === "/api/copilotkit/info") ||
           (init.method === "POST" &&
-            /^\/api\/copilotkit\/agent\/[^/]+\/(run|connect)$/.test(url.pathname));
+            /^\/api\/copilotkit\/agent\/[^/]+\/(run|connect|stop\/[^/]+)$/.test(url.pathname));
         if (url.origin !== apiOrigin || url.username || url.password || !allowed) {
           throw new Error("Invalid OpenBot runtime request.");
         }

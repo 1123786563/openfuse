@@ -13,9 +13,16 @@ import {
   type OpenBotHistory,
   type OpenBotSend,
   observeOpenBotRun,
+  stopOpenBotRun,
   syncOpenBotRun,
 } from "./openbot-run";
 import { Button, ErrorNotice, s } from "./ui";
+
+type RunObservation = {
+  controller: AbortController;
+  runId: string | null;
+  stoppingRunId: string | null;
+};
 
 export function OpenBotChat({
   adapter,
@@ -37,20 +44,25 @@ export function OpenBotChat({
   const [draft, setDraft] = useState("");
   const [state, setState] = useState<
     | { kind: "checking" | "ready" | "offline" }
-    | { kind: "running"; runId: string }
+    | { kind: "running"; runId: string; stop: "available" | "pending" | "failed" }
     | { kind: "unconfirmed"; send: OpenBotSend }
   >({ kind: "checking" });
   const [runFailed, setRunFailed] = useState(false);
   const pendingSend = useRef<OpenBotSend | null>(null);
   const displayedThread = useRef<string | null>(null);
-  const operation = useRef<AbortController | null>(null);
+  const operation = useRef<RunObservation | null>(null);
   const scroll = useRef<ScrollView>(null);
 
   const sync = useCallback(
     async (send?: OpenBotSend) => {
       if (operation.current) return;
       const controller = new AbortController();
-      operation.current = controller;
+      const current: RunObservation = {
+        controller,
+        runId: null,
+        stoppingRunId: null,
+      };
+      operation.current = current;
       const { signal } = controller;
       const pending = pendingSend.current;
       if (send && !pending) pendingSend.current = send;
@@ -74,7 +86,18 @@ export function OpenBotChat({
           signal,
           send: outgoing,
           onMessages: setMessages,
-          onRun: (runId) => setState({ kind: "running", runId }),
+          onRun: (runId) => {
+            current.runId = runId;
+            setState(
+              runId
+                ? {
+                    kind: "running",
+                    runId,
+                    stop: current.stoppingRunId === runId ? "pending" : "available",
+                  }
+                : { kind: "checking" },
+            );
+          },
         });
 
       try {
@@ -98,15 +121,40 @@ export function OpenBotChat({
         else if (error instanceof OpenBotError && error.code === "refused") onAccessLost(channelId);
         else setState({ kind: "offline" });
       } finally {
-        if (operation.current === controller) operation.current = null;
+        if (operation.current === current) operation.current = null;
       }
     },
     [adapter, channelId, onAccessLost, onSessionExpired, transport],
   );
 
+  const stop = async (runId: string, saved: OpenBotHistory) => {
+    const current = operation.current;
+    if (!current || current.runId !== runId || current.stoppingRunId === runId) return;
+    current.stoppingRunId = runId;
+    setState({ kind: "running", runId, stop: "pending" });
+    const stillWatching = () => operation.current === current && current.runId === runId;
+    try {
+      await stopOpenBotRun({ history: saved, runId, transport, signal: current.controller.signal });
+      if (current.stoppingRunId === runId) current.stoppingRunId = null;
+      if (!stillWatching()) return;
+      // Whether the stop landed or the run already ended, reload and join the
+      // canonical run. A late response must leave any newer observation alone.
+      current.controller.abort();
+      operation.current = null;
+      void sync();
+    } catch (error) {
+      if (current.stoppingRunId === runId) current.stoppingRunId = null;
+      if (!stillWatching()) return;
+      if (error instanceof OpenBotError && error.code === "authentication_required")
+        onSessionExpired();
+      else if (error instanceof OpenBotError && error.code === "refused") onAccessLost(channelId);
+      else setState({ kind: "running", runId, stop: "failed" });
+    }
+  };
+
   useEffect(() => {
     const suspend = () => {
-      operation.current?.abort();
+      operation.current?.controller.abort();
       operation.current = null;
     };
     void sync();
@@ -171,7 +219,19 @@ export function OpenBotChat({
         )}
       </ScrollView>
       {state.kind === "checking" && <Text style={s.muted}>Checking history and runs…</Text>}
-      {state.kind === "running" && <Text style={s.muted}>Bot is working…</Text>}
+      {state.kind === "running" && history && (
+        <>
+          <Text style={s.muted}>Bot is working…</Text>
+          {state.stop === "failed" && <ErrorNotice error="Could not stop the Bot run." />}
+          <Button
+            small
+            disabled={state.stop === "pending"}
+            onPress={() => void stop(state.runId, history)}
+          >
+            {state.stop === "pending" ? "Stopping…" : "Stop run"}
+          </Button>
+        </>
+      )}
       {state.kind === "offline" && (
         <>
           <ErrorNotice error="Could not sync with OpenBot." />

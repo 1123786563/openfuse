@@ -184,6 +184,10 @@ test("switching accounts invalidates A's in-flight history and B cannot open A's
           return accountA
             ? Response.json({ threadId: "thread-a", runId: "run-a" })
             : new Response(null, { status: 403 });
+        case "/api/copilotkit/agent/bot/stop/thread-a":
+          assert.equal(init.method, "POST");
+          assert.deepEqual(JSON.parse(init.body ?? ""), { runId: "run-a" });
+          return accountA ? Response.json({ stopped: true }) : new Response(null, { status: 403 });
         case "/api/copilotkit/threads/thread-a/messages":
           if (!accountA) return new Response(null, { status: 403 });
           startHistory();
@@ -206,12 +210,17 @@ test("switching accounts invalidates A's in-flight history and B cannot open A's
     body: JSON.stringify({ threadId: "thread-a" }),
   };
   const connectUrl = `${apiOrigin}/api/copilotkit/agent/bot/connect`;
+  const stopUrl = `${apiOrigin}/api/copilotkit/agent/bot/stop/thread-a`;
+  const stop = { method: "POST", body: JSON.stringify({ runId: "run-a" }) };
   assert.equal(
     await (await a.transport.requestRuntime?.(connectUrl, join))
       ?.json()
       .then((response) => response.runId),
     "run-a",
   );
+  assert.deepEqual(await (await a.transport.requestRuntime?.(stopUrl, stop))?.json(), {
+    stopped: true,
+  });
   const pending = assert.rejects(adapterA.openConversation(listed.channelId), { status: 401 });
   await historyStarted;
   await session.signOut();
@@ -227,6 +236,8 @@ test("switching accounts invalidates A's in-flight history and B cannot open A's
   );
   assert.equal((await b.transport.requestRuntime?.(connectUrl, join))?.status, 403);
   assert.equal((await a.transport.requestRuntime?.(connectUrl, join))?.status, 401);
+  assert.equal((await b.transport.requestRuntime?.(stopUrl, stop))?.status, 403);
+  assert.equal((await a.transport.requestRuntime?.(stopUrl, stop))?.status, 401);
   finishHistory(Response.json({ messages: [{ id: "1", role: "user", content: "Private" }] }));
   await pending;
   await assert.rejects(adapterA.listConversations({}), { status: 401 });
@@ -253,11 +264,16 @@ test("the SDK transport scopes runtime requests to the signed-in OpenBot origin"
   assert.ok(request);
   const path = "/api/copilotkit/agent/bot/connect";
   await assert.rejects(request(`https://other.example${path}`, { method: "POST" }));
-  await assert.rejects(request(`${apiOrigin}/api/copilotkit/agent/bot/stop`, { method: "POST" }));
+  const stopPath = "/api/copilotkit/agent/bot/stop/thread";
+  const stop = { method: "POST", body: JSON.stringify({ runId: "run-1" }) };
+  await assert.rejects(request(`https://other.example${stopPath}`, stop));
+  await assert.rejects(request(`${apiOrigin}${stopPath}`, { method: "GET" }));
+  await assert.rejects(request(`${apiOrigin}/api/copilotkit/agent/bot/stop`, stop));
+  assert.equal((await request(`${apiOrigin}${stopPath}`, stop)).status, 204);
   assert.equal((await request(`${apiOrigin}${path}`, { method: "POST", body: "{}" })).status, 204);
   await session.restore();
   assert.equal((await request(`${apiOrigin}${path}`, { method: "POST" })).status, 401);
-  assert.deepEqual(requests, [path]);
+  assert.deepEqual(requests, [stopPath, path]);
 });
 
 test("the native session can create a direct Conversation and rejects unrelated writes", async () => {

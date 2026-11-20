@@ -15,6 +15,41 @@ const connection = z.object({
   runId: z.string().min(1).nullish(),
 });
 
+export async function stopOpenBotRun({
+  history,
+  runId,
+  transport,
+  signal,
+}: {
+  history: Pick<OpenBotHistory, "agentId" | "threadId">;
+  runId: string;
+  transport: OpenBotTransport;
+  signal: AbortSignal;
+}) {
+  if (!transport.requestRuntime) {
+    throw new OpenBotError("not_configured", "OpenBot runtime is unavailable.");
+  }
+  const { agentId, threadId } = history;
+  const response = await transport.requestRuntime(
+    `${transport.runtimeUrl}/agent/${encodeURIComponent(agentId)}/stop/${encodeURIComponent(threadId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ runId }),
+      signal,
+    },
+  );
+  if (!response.ok) {
+    const code =
+      response.status === 401
+        ? "authentication_required"
+        : response.status === 403 || response.status === 404
+          ? "refused"
+          : "http_error";
+    throw new OpenBotError(code, "OpenBot could not stop the run.", response.status);
+  }
+}
+
 export async function observeOpenBotRun({
   history,
   transport,
@@ -28,7 +63,7 @@ export async function observeOpenBotRun({
   signal: AbortSignal;
   send?: OpenBotSend;
   onMessages: (messages: TextMessage[]) => void;
-  onRun: (runId: string) => void;
+  onRun: (runId: string | null) => void;
 }) {
   const request = transport.requestRuntime;
   if (!request) throw new OpenBotError("not_configured", "OpenBot runtime is unavailable.");
@@ -118,6 +153,7 @@ export async function observeOpenBotRun({
   } catch (error) {
     throw requestError ?? error;
   } finally {
+    if (!signal.aborted) onRun(null);
     signal.removeEventListener("abort", detach);
     subscription.unsubscribe();
     await agent.detachActiveRun();
