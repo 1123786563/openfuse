@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Linking, Text, View } from "react-native";
+import { AppState, Linking, Text, View } from "react-native";
 import { type OpenBotAdapter, OpenBotError } from "../../../packages/backends/src/openbot";
 import { openBotConversationUrl } from "./openbot-conversation-url";
 import { Button, ErrorNotice, s } from "./ui";
@@ -10,39 +10,59 @@ export function OpenBotApprovalStatus({
   adapter,
   history,
   webOrigin,
+  watchingRun,
   onSessionExpired,
 }: {
   adapter: OpenBotAdapter;
   history: History;
   webOrigin: string;
+  watchingRun: boolean;
   onSessionExpired: () => void;
 }) {
   const [status, setStatus] = useState<"loading" | "pending" | "clear" | "unavailable">("loading");
   const [linkFailed, setLinkFailed] = useState(false);
-  const { channelId, threadId } = history;
+  const monitor = watchingRun || status === "pending";
 
   useEffect(() => {
     const controller = new AbortController();
-    void adapter.hasPendingApproval(threadId, controller.signal).then(
-      (pending) => {
+    let checking = false;
+    async function refresh() {
+      if (checking || controller.signal.aborted) return;
+      checking = true;
+      try {
+        const pending = await adapter.hasPendingApproval(history.threadId, controller.signal);
         if (!controller.signal.aborted) setStatus(pending ? "pending" : "clear");
-      },
-      (error: unknown) => {
+      } catch (error) {
         if (controller.signal.aborted) return;
         if (error instanceof OpenBotError && error.code === "authentication_required") {
           onSessionExpired();
         } else {
           setStatus("unavailable");
         }
-      },
-    );
-    return () => controller.abort();
-  }, [adapter, threadId, onSessionExpired]);
+      } finally {
+        checking = false;
+      }
+    }
+    void refresh();
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void refresh();
+    });
+    const interval = monitor
+      ? setInterval(() => {
+          if (AppState.currentState === "active") void refresh();
+        }, 5000)
+      : undefined;
+    return () => {
+      controller.abort();
+      subscription.remove();
+      clearInterval(interval);
+    };
+  }, [adapter, history, monitor, onSessionExpired]);
 
   async function openOnWeb() {
     setLinkFailed(false);
     try {
-      await Linking.openURL(openBotConversationUrl({ webOrigin, channelId }));
+      await Linking.openURL(openBotConversationUrl({ webOrigin, channelId: history.channelId }));
     } catch {
       setLinkFailed(true);
     }

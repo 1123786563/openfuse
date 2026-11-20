@@ -1,16 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, ScrollView, Text, View } from "react-native";
+import { ActivityIndicator, AppState, FlatList, Text, View } from "react-native";
 import type { OpenBotTransport } from "../../../packages/backends/src/openbot";
 import { OpenBotAdapter, OpenBotError } from "../../../packages/backends/src/openbot";
-import { AssistantResponse } from "./assistant-response";
-import { OpenBotApprovalStatus } from "./openbot-approval-status";
 import { OpenBotBotPicker } from "./openbot-bot-picker";
+import { OpenBotChat } from "./openbot-chat";
 import { Button, colors, ErrorNotice, s } from "./ui";
 
 type Page = Awaited<ReturnType<OpenBotAdapter["listConversations"]>>;
 type Conversation = Page["conversations"][number];
-type History = Awaited<ReturnType<OpenBotAdapter["openConversation"]>>;
-type HistoryState = { kind: "loading" | "failed" } | { kind: "ready"; history: History };
 
 function requiresSignIn(error: unknown) {
   return error instanceof OpenBotError && error.code === "authentication_required";
@@ -77,6 +74,14 @@ export function OpenBotConversations({
     };
   }, [loadPage]);
 
+  useEffect(() => {
+    if (selected || choosingBot) return;
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void loadPage();
+    });
+    return () => subscription.remove();
+  }, [choosingBot, loadPage, selected]);
+
   const onAccessLost = useCallback((channelId: Conversation["channelId"]) => {
     setSelected(null);
     setAccessLost(true);
@@ -91,15 +96,22 @@ export function OpenBotConversations({
 
   if (selected) {
     return (
-      <OpenBotHistory
-        key={selected.channelId}
-        adapter={adapter}
-        webOrigin={webOrigin}
-        conversation={selected}
-        onBack={() => setSelected(null)}
-        onAccessLost={onAccessLost}
-        onSessionExpired={onSessionExpired}
-      />
+      <View key={selected.channelId} style={{ flex: 1, gap: 12 }}>
+        <Button small onPress={() => setSelected(null)}>
+          Back to conversations
+        </Button>
+        <Text accessibilityRole="header" style={s.heading}>
+          {selected.title}
+        </Text>
+        <OpenBotChat
+          adapter={adapter}
+          channelId={selected.channelId}
+          webOrigin={webOrigin}
+          transport={transport}
+          onAccessLost={onAccessLost}
+          onSessionExpired={onSessionExpired}
+        />
+      </View>
     );
   }
 
@@ -186,100 +198,6 @@ export function OpenBotConversations({
         </View>
       }
     />
-  );
-}
-
-function OpenBotHistory({
-  adapter,
-  webOrigin,
-  conversation,
-  onBack,
-  onAccessLost,
-  onSessionExpired,
-}: {
-  adapter: OpenBotAdapter;
-  webOrigin: string;
-  conversation: Conversation;
-  onBack: () => void;
-  onAccessLost: (channelId: Conversation["channelId"]) => void;
-  onSessionExpired: () => void;
-}) {
-  const [attempt, setAttempt] = useState(0);
-  const [state, setState] = useState<HistoryState>({ kind: "loading" });
-  const { channelId, title } = conversation;
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setState({ kind: "loading" });
-    void adapter.openConversation(channelId, controller.signal).then(
-      (history) => {
-        if (!controller.signal.aborted) setState({ kind: "ready", history });
-      },
-      (error: unknown) => {
-        if (controller.signal.aborted) return;
-        if (requiresSignIn(error)) onSessionExpired();
-        else if (error instanceof OpenBotError && error.code === "refused") {
-          onAccessLost(channelId);
-        } else {
-          setState({ kind: "failed" });
-        }
-      },
-    );
-    return () => controller.abort();
-  }, [adapter, attempt, channelId, onAccessLost, onSessionExpired]);
-
-  return (
-    <View style={{ flex: 1, gap: 12 }}>
-      <Button small onPress={onBack}>
-        Back to conversations
-      </Button>
-      <Text accessibilityRole="header" style={s.heading}>
-        {title}
-      </Text>
-      {state.kind === "loading" && <Loading label="Loading conversation history" />}
-      {state.kind === "failed" && (
-        <>
-          <ErrorNotice error="Could not load conversation history." />
-          <Button
-            onPress={() => {
-              setAttempt((previous) => previous + 1);
-            }}
-          >
-            Try again
-          </Button>
-        </>
-      )}
-      {state.kind === "ready" && (
-        <ScrollView contentContainerStyle={{ gap: 14, paddingBottom: 12 }}>
-          <OpenBotApprovalStatus
-            adapter={adapter}
-            history={state.history}
-            webOrigin={webOrigin}
-            onSessionExpired={onSessionExpired}
-          />
-          <Button small onPress={() => setAttempt((previous) => previous + 1)}>
-            Refresh conversation
-          </Button>
-          {state.history.messages.map((message) => (
-            <View key={message.id} style={s.card}>
-              <Text style={s.label}>{message.role === "user" ? "You" : "Bot"}</Text>
-              {message.role === "assistant" ? (
-                <AssistantResponse content={message.text} />
-              ) : (
-                <Text selectable style={s.text}>
-                  {message.text}
-                </Text>
-              )}
-            </View>
-          ))}
-          {state.history.hasNonTextMessages ? (
-            <Text style={s.muted}>OpenBot Web can display additional conversation content.</Text>
-          ) : state.history.messages.length === 0 ? (
-            <Text style={s.muted}>No messages yet.</Text>
-          ) : null}
-        </ScrollView>
-      )}
-    </View>
   );
 }
 

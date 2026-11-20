@@ -1,3 +1,4 @@
+import { MessageSchema } from "@ag-ui/core";
 import { z } from "zod";
 
 /** Verified against OpenBot a96d88c6 and its public CopilotKit runtime 1.70.1. */
@@ -10,6 +11,7 @@ export const OPENBOT_CONTRACT_REF = "a96d88c6fb75385842529d7db7d463f4a8c4a86e";
  */
 export interface OpenBotTransport {
   runtimeUrl: string;
+  requestRuntime?(url: string, init: RequestInit): Promise<Response>;
   request(path: string, init?: RequestInit): Promise<Pick<Response, "ok" | "status" | "json">>;
 }
 
@@ -113,20 +115,21 @@ const userContent = z.union([
   z.string(),
   z.array(
     z.discriminatedUnion("type", [
-      z.object({ type: z.literal("text"), text: z.string() }),
-      z.object({ type: z.literal("image") }),
-      z.object({ type: z.literal("audio") }),
-      z.object({ type: z.literal("video") }),
-      z.object({ type: z.literal("document") }),
+      z.looseObject({ type: z.literal("text"), text: z.string() }),
+      z.looseObject({ type: z.literal("image") }),
+      z.looseObject({ type: z.literal("audio") }),
+      z.looseObject({ type: z.literal("video") }),
+      z.looseObject({ type: z.literal("document") }),
+      z.looseObject({ type: z.literal("binary") }),
     ]),
   ),
 ]);
 const threadHistory = z.object({
   messages: z.array(
     z.discriminatedUnion("role", [
-      z.object({ id: nonempty, role: z.literal("user"), content: userContent }),
-      z.object({ id: nonempty, role: z.literal("assistant"), content: z.string().nullish() }),
-      z.object({
+      z.looseObject({ id: nonempty, role: z.literal("user"), content: userContent }),
+      z.looseObject({ id: nonempty, role: z.literal("assistant"), content: z.string().nullish() }),
+      z.looseObject({
         id: nonempty,
         role: z.enum(["tool", "system", "developer", "activity", "reasoning"]),
       }),
@@ -266,9 +269,18 @@ export class OpenBotAdapter {
       }
       return text ? [{ id, role, text }] : [];
     });
+    const runMessages = MessageSchema.array().safeParse(
+      messages.map((message) =>
+        message.role === "assistant" && message.content === null
+          ? { ...message, content: undefined }
+          : message,
+      ),
+    );
     return {
       channelId: channel.id,
       threadId: channel.threadId,
+      agentId: channel.agentId,
+      runMessages: runMessages.success ? runMessages.data : null,
       messages: transcript,
       hasNonTextMessages,
     };

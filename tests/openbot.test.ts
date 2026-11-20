@@ -325,17 +325,26 @@ test("opening a Channel reads its current account Thread and distinguishes failu
   assert.deepEqual(await adapter.openConversation(channelId), {
     channelId: "channel/1",
     threadId: "current/thread",
+    agentId: "bot/1",
+    runMessages: [],
     messages: [],
     hasNonTextMessages: false,
   });
   history = Response.json({
     messages: [
-      { id: "1", role: "user", content: [{ type: "text", text: "Saved question" }] },
+      {
+        id: "1",
+        role: "user",
+        content: [
+          { type: "text", text: "Saved question" },
+          { type: "image", source: { type: "url", value: "https://openbot.test/image" } },
+        ],
+      },
       {
         id: "2",
         role: "assistant",
         content: null,
-        toolCalls: [{ id: "t", name: "tool", args: {} }],
+        toolCalls: [{ id: "t", type: "function", function: { name: "tool", arguments: "{}" } }],
       },
       { id: "3", role: "assistant", content: "Saved answer" },
     ],
@@ -345,6 +354,14 @@ test("opening a Channel reads its current account Thread and distinguishes failu
     { id: "1", role: "user", text: "Saved question" },
     { id: "3", role: "assistant", text: "Saved answer" },
   ]);
+  assert.deepEqual(conversation.runMessages?.[0], {
+    id: "1",
+    role: "user",
+    content: [
+      { type: "text", text: "Saved question" },
+      { type: "image", source: { type: "url", value: "https://openbot.test/image" } },
+    ],
+  });
   assert.equal(conversation.hasNonTextMessages, true);
   assert.deepEqual(
     calls.map(({ path }) => path),

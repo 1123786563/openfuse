@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, AppState, Text, View } from "react-native";
+import { ActivityIndicator, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { OpenBotConversations } from "./openbot-conversations";
 import { configureOpenBotSession } from "./openbot-native";
@@ -46,21 +46,18 @@ function OpenBotSessionPanel({
   onOpenStandalone: () => void;
 }) {
   const [screen, setScreen] = useState<Screen>({ kind: "loading" });
-  const [refreshing, setRefreshing] = useState(false);
   const running = useRef(false);
   const run = useCallback(
-    async (action: Action, keepConversation = false) => {
+    async (action: Action) => {
       if (running.current) return;
       running.current = true;
-      if (keepConversation) setRefreshing(true);
-      else setScreen({ kind: "loading" });
+      setScreen({ kind: "loading" });
       try {
         setScreen(await session[action]());
       } catch {
         setScreen({ kind: "retry", action });
       } finally {
         running.current = false;
-        if (keepConversation) setRefreshing(false);
       }
     },
     [session],
@@ -69,15 +66,6 @@ function OpenBotSessionPanel({
   useEffect(() => {
     void run("restore");
   }, [run]);
-
-  const connected = screen.kind === "connected";
-  useEffect(() => {
-    if (!connected) return;
-    const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") void run("restore", true);
-    });
-    return () => subscription.remove();
-  }, [connected, run]);
 
   const onSessionExpired = useCallback(() => void run("restore"), [run]);
   if (screen.kind === "connected") {
@@ -90,9 +78,7 @@ function OpenBotSessionPanel({
           webOrigin={session.webOrigin}
           onSessionExpired={onSessionExpired}
         />
-        <Button disabled={refreshing} onPress={() => void run("signOut")}>
-          Sign out of OpenBot
-        </Button>
+        <Button onPress={() => void run("signOut")}>Sign out of OpenBot</Button>
         <Button onPress={onOpenStandalone}>OpenFuse workspace</Button>
       </>
     );
