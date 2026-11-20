@@ -46,18 +46,21 @@ function OpenBotSessionPanel({
   onOpenStandalone: () => void;
 }) {
   const [screen, setScreen] = useState<Screen>({ kind: "loading" });
+  const [refreshing, setRefreshing] = useState(false);
   const running = useRef(false);
   const run = useCallback(
-    async (action: Action) => {
+    async (action: Action, keepConversation = false) => {
       if (running.current) return;
       running.current = true;
-      setScreen({ kind: "loading" });
+      if (keepConversation) setRefreshing(true);
+      else setScreen({ kind: "loading" });
       try {
         setScreen(await session[action]());
       } catch {
         setScreen({ kind: "retry", action });
       } finally {
         running.current = false;
+        if (keepConversation) setRefreshing(false);
       }
     },
     [session],
@@ -71,7 +74,7 @@ function OpenBotSessionPanel({
   useEffect(() => {
     if (!connected) return;
     const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") void run("restore");
+      if (state === "active") void run("restore", true);
     });
     return () => subscription.remove();
   }, [connected, run]);
@@ -81,8 +84,15 @@ function OpenBotSessionPanel({
     return (
       <>
         <Text style={s.muted}>Signed in as {screen.user.name || screen.user.id}</Text>
-        <OpenBotConversations transport={screen.transport} onSessionExpired={onSessionExpired} />
-        <Button onPress={() => void run("signOut")}>Sign out of OpenBot</Button>
+        <OpenBotConversations
+          key={screen.user.id}
+          transport={screen.transport}
+          webOrigin={session.webOrigin}
+          onSessionExpired={onSessionExpired}
+        />
+        <Button disabled={refreshing} onPress={() => void run("signOut")}>
+          Sign out of OpenBot
+        </Button>
         <Button onPress={onOpenStandalone}>OpenFuse workspace</Button>
       </>
     );
