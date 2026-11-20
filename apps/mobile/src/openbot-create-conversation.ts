@@ -25,8 +25,26 @@ export async function createOpenBotConversation(
   }
 
   try {
-    const page = await adapter.listConversations({ signal });
-    return { kind: "reconciled", page };
+    const conversations = new Map<string, Page["conversations"][number]>();
+    const seenCursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      if (signal?.aborted) return { kind: "needs_refresh" };
+      const page = await adapter.listConversations({ cursor, signal });
+      if (signal?.aborted) return { kind: "needs_refresh" };
+      for (const conversation of page.conversations) {
+        conversations.set(conversation.channelId, conversation);
+      }
+      cursor = page.nextCursor ?? undefined;
+      if (cursor !== undefined) {
+        if (seenCursors.has(cursor)) return { kind: "needs_refresh" };
+        seenCursors.add(cursor);
+      }
+    } while (cursor !== undefined);
+    return {
+      kind: "reconciled",
+      page: { conversations: [...conversations.values()], nextCursor: null },
+    };
   } catch (error) {
     if (error instanceof OpenBotError && error.code === "authentication_required") throw error;
     return { kind: "needs_refresh" };

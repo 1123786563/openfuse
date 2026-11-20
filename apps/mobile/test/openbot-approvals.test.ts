@@ -3,7 +3,7 @@ import test from "node:test";
 import { OpenBotAdapter } from "../../../packages/backends/src/openbot.ts";
 import { openBotConversationUrl } from "../src/openbot-conversation-url.ts";
 
-test("pending approval status follows the opened Thread and updates after a Web decision", async () => {
+test("the opened Thread tracks an approval until its continuation completes", async () => {
   let status = "pending";
   const adapter = new OpenBotAdapter({
     enabled: true,
@@ -29,11 +29,15 @@ test("pending approval status follows the opened Thread and updates after a Web 
             });
           case "/api/copilotkit/threads/thread-1/messages?agentId=bot":
             return Response.json({ messages: [] });
-          case "/api/approvals":
+          case "/api/approvals?threadId=thread-1":
             return Response.json({
               requests: [
-                { status, action: { threadId: "thread-1", args: { preview: "private" } } },
-                { status: "pending", action: { threadId: "channel-1" } },
+                {
+                  id: "approval",
+                  status,
+                  action: { threadId: "thread-1", args: { preview: "private" } },
+                },
+                { id: "unrelated", status: "pending", action: { threadId: "channel-1" } },
               ],
             });
           default:
@@ -47,11 +51,14 @@ test("pending approval status follows the opened Thread and updates after a Web 
   const [conversation] = conversations;
   assert.ok(conversation);
   const history = await adapter.openConversation(conversation.channelId);
-  assert.equal(await adapter.hasPendingApproval(history.threadId), true);
-  for (const decision of ["approved", "denied", "consumed", "completed"]) {
+  for (const decision of ["pending", "approved", "denied", "consumed"]) {
     status = decision;
-    assert.equal(await adapter.hasPendingApproval(history.threadId), false);
+    assert.deepEqual(await adapter.listUnsettledApprovals(history.threadId), [
+      { id: "approval", status: decision },
+    ]);
   }
+  status = "completed";
+  assert.deepEqual(await adapter.listUnsettledApprovals(history.threadId), []);
 });
 
 test("Web links use the verified deployment and keep the Channel ID in one path segment", async () => {

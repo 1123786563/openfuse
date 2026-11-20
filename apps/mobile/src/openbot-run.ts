@@ -181,8 +181,11 @@ export async function syncOpenBotRun({
   let beforeJoin = saved;
   let unresolved = pending;
   // A previous send may have appeared after the user opened the draft for review.
-  if (send && (!pending || unconfirmedOpenBotSend(pending, saved))) {
-    if (!saved.runMessages) return { unconfirmed: send, streamFailed };
+  if (
+    send &&
+    saved.runMessages &&
+    (!pending || send.text !== pending.text || unconfirmedOpenBotSend(pending, saved))
+  ) {
     unresolved = send;
     try {
       ({ streamFailed } = await observe(saved, send));

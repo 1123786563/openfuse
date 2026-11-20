@@ -141,7 +141,8 @@ type OpenBotThreadId = z.infer<typeof openedChannel>["channel"]["threadId"];
 const approvalInbox = z.object({
   requests: z.array(
     z.object({
-      status: nonempty,
+      id: nonempty,
+      status: z.enum(["pending", "approved", "denied", "consumed", "completed"]),
       action: z.object({ threadId: z.string() }),
     }),
   ),
@@ -286,11 +287,12 @@ export class OpenBotAdapter {
     };
   }
 
-  async hasPendingApproval(threadId: OpenBotThreadId, signal?: AbortSignal) {
-    const { requests } = await this.json("/api/approvals", approvalInbox, { signal });
-    return requests.some(
-      (request) => request.status === "pending" && request.action.threadId === threadId,
-    );
+  async listUnsettledApprovals(threadId: OpenBotThreadId, signal?: AbortSignal) {
+    const query = new URLSearchParams({ threadId });
+    const { requests } = await this.json(`/api/approvals?${query}`, approvalInbox, { signal });
+    return requests
+      .filter((request) => request.action.threadId === threadId && request.status !== "completed")
+      .map(({ id, status }) => ({ id, status }));
   }
 
   private async readDirectChannel(id: string, signal?: AbortSignal) {

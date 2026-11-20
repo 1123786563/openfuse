@@ -93,6 +93,20 @@ for (const scenario of ["lost response", "conflict"] as const) {
       });
       assert.deepEqual(steps, ["history", "connect", "history"]);
       assert.equal(review.unconfirmed, null);
+
+      const edited = { id: "edited-id", text: "hello again" };
+      const sent: (typeof outgoing)[] = [];
+      const replacement = await syncOpenBotRun({
+        read: () => adapter.openConversation(listed.channelId),
+        observe: async (_history, send) => {
+          if (send) sent.push(send);
+          return { streamFailed: false };
+        },
+        send: edited,
+        pending: outgoing,
+      });
+      assert.deepEqual(sent, [edited]);
+      assert.deepEqual(replacement.unconfirmed, edited);
     }
   });
 }

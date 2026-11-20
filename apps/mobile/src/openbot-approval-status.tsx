@@ -8,30 +8,48 @@ type History = Awaited<ReturnType<OpenBotAdapter["openConversation"]>>;
 
 export function OpenBotApprovalStatus({
   adapter,
-  history,
+  channelId,
+  threadId,
   webOrigin,
-  watchingRun,
+  refreshConversation,
   onSessionExpired,
 }: {
   adapter: OpenBotAdapter;
-  history: History;
+  channelId: History["channelId"];
+  threadId: History["threadId"];
   webOrigin: string;
-  watchingRun: boolean;
+  refreshConversation: () => Promise<boolean>;
   onSessionExpired: () => void;
 }) {
-  const [status, setStatus] = useState<"loading" | "pending" | "clear" | "unavailable">("loading");
+  const [status, setStatus] = useState<
+    "loading" | "pending" | "continuing" | "clear" | "unavailable"
+  >("loading");
   const [linkFailed, setLinkFailed] = useState(false);
-  const monitor = watchingRun || status === "pending";
 
   useEffect(() => {
     const controller = new AbortController();
     let checking = false;
+    const observed = new Set<string>();
     async function refresh() {
       if (checking || controller.signal.aborted) return;
       checking = true;
       try {
-        const pending = await adapter.hasPendingApproval(history.threadId, controller.signal);
-        if (!controller.signal.aborted) setStatus(pending ? "pending" : "clear");
+        const requests = await adapter.listUnsettledApprovals(threadId, controller.signal);
+        if (controller.signal.aborted) return;
+        const current = new Set(requests.map(({ id }) => id));
+        for (const id of current) observed.add(id);
+        const settled = [...observed].filter((id) => !current.has(id));
+        const pending = requests.some(({ status }) => status === "pending");
+        setStatus(pending ? "pending" : observed.size ? "continuing" : "clear");
+        if (
+          settled.length &&
+          AppState.currentState === "active" &&
+          (await refreshConversation()) &&
+          !controller.signal.aborted
+        ) {
+          for (const id of settled) observed.delete(id);
+          setStatus(pending ? "pending" : observed.size ? "continuing" : "clear");
+        }
       } catch (error) {
         if (controller.signal.aborted) return;
         if (error instanceof OpenBotError && error.code === "authentication_required") {
@@ -47,22 +65,20 @@ export function OpenBotApprovalStatus({
     const subscription = AppState.addEventListener("change", (state) => {
       if (state === "active") void refresh();
     });
-    const interval = monitor
-      ? setInterval(() => {
-          if (AppState.currentState === "active") void refresh();
-        }, 5000)
-      : undefined;
+    const interval = setInterval(() => {
+      if (AppState.currentState === "active") void refresh();
+    }, 5000);
     return () => {
       controller.abort();
       subscription.remove();
       clearInterval(interval);
     };
-  }, [adapter, history, monitor, onSessionExpired]);
+  }, [adapter, threadId, refreshConversation, onSessionExpired]);
 
   async function openOnWeb() {
     setLinkFailed(false);
     try {
-      await Linking.openURL(openBotConversationUrl({ webOrigin, channelId: history.channelId }));
+      await Linking.openURL(openBotConversationUrl({ webOrigin, channelId }));
     } catch {
       setLinkFailed(true);
     }
@@ -70,6 +86,13 @@ export function OpenBotApprovalStatus({
 
   if (status === "unavailable") {
     return <Text style={s.muted}>Could not check approval status.</Text>;
+  }
+  if (status === "continuing") {
+    return (
+      <Text accessibilityLiveRegion="polite" style={s.muted}>
+        Checking the conversation after approval…
+      </Text>
+    );
   }
   if (status !== "pending") return null;
 

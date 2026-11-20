@@ -1,0 +1,7 @@
+# OpenBot connected mode on mobile
+
+Set `EXPO_PUBLIC_OPENBOT_API_ORIGIN` to the OpenBot API origin before building the native app. Set `EXPO_PUBLIC_OPENBOT_WEB_ORIGIN` if the Web app runs on a different origin. Both use HTTPS. Development builds also accept HTTP on the supported loopback hosts.
+
+In the native app, select **OpenBot workspace** and sign in through the browser. The OpenBot server must support the OpenFuse authorization and code exchange endpoints and the `openfuse://auth/callback` redirect. OpenFuse keeps the per-user session in Expo SecureStore.
+
+The Conversations list shows active direct Conversations with one Bot. **New conversation** opens the available Bot list. A Conversation displays text history, streams text replies, and lets you stop the active run. Use OpenBot Web for group Conversations, full rich content, and approval decisions. The mobile client reads approval status from OpenBot's `GET /api/approvals?threadId=<id>` endpoint and reloads the Conversation when a tracked approval settles.

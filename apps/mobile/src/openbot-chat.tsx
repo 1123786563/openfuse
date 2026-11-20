@@ -55,7 +55,7 @@ export function OpenBotChat({
 
   const sync = useCallback(
     async (send?: OpenBotSend) => {
-      if (operation.current) return;
+      if (operation.current) return false;
       const controller = new AbortController();
       const current: RunObservation = {
         controller,
@@ -65,7 +65,6 @@ export function OpenBotChat({
       operation.current = current;
       const { signal } = controller;
       const pending = pendingSend.current;
-      if (send && !pending) pendingSend.current = send;
       setState({ kind: "checking" });
       setRunFailed(false);
       const read = async () => {
@@ -104,22 +103,30 @@ export function OpenBotChat({
         const { unconfirmed, streamFailed } = await syncOpenBotRun({
           read,
           observe: (saved, outgoing) => {
-            if (outgoing) pendingSend.current = outgoing;
+            if (outgoing) {
+              pendingSend.current = outgoing;
+              setDraft((draft) => (draft.trim() === outgoing.text ? "" : draft));
+            }
             return observe(saved, outgoing);
           },
           send,
           pending,
         });
-        if (signal.aborted) return;
+        if (signal.aborted) return false;
+        if (send && pending?.text === send.text && !unconfirmed) {
+          setDraft((draft) => (draft.trim() === send.text ? "" : draft));
+        }
         pendingSend.current = unconfirmed;
         setRunFailed(streamFailed);
         setState(unconfirmed ? { kind: "unconfirmed", send: unconfirmed } : { kind: "ready" });
+        return true;
       } catch (error) {
-        if (signal.aborted) return;
+        if (signal.aborted) return false;
         if (error instanceof OpenBotError && error.code === "authentication_required")
           onSessionExpired();
         else if (error instanceof OpenBotError && error.code === "refused") onAccessLost(channelId);
         else setState({ kind: "offline" });
+        return false;
       } finally {
         if (operation.current === current) operation.current = null;
       }
@@ -183,9 +190,10 @@ export function OpenBotChat({
       {history && (
         <OpenBotApprovalStatus
           adapter={adapter}
-          history={history}
+          channelId={history.channelId}
+          threadId={history.threadId}
           webOrigin={webOrigin}
-          watchingRun={state.kind === "running"}
+          refreshConversation={sync}
           onSessionExpired={onSessionExpired}
         />
       )}
@@ -247,7 +255,7 @@ export function OpenBotChat({
           <Button onPress={() => void sync()}>Check again</Button>
           <Button
             onPress={() => {
-              setDraft(state.send.text);
+              setDraft((current) => current || state.send.text);
               setState({ kind: "ready" });
             }}
           >
@@ -273,7 +281,6 @@ export function OpenBotChat({
         onPress={() => {
           const text = draft.trim();
           if (!text || !sendEnabled || operation.current) return;
-          setDraft("");
           void sync({ id: Crypto.randomUUID(), text });
         }}
       >

@@ -24,7 +24,9 @@ export function OpenBotConversations({
 }) {
   const adapter = useMemo(() => new OpenBotAdapter({ enabled: true, transport }), [transport]);
   const [page, setPage] = useState<Page | null>(null);
-  const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
+  const [status, setStatus] = useState<
+    { kind: "loading" | "ready" } | { kind: "failed"; cursor: string | undefined }
+  >({ kind: "loading" });
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [accessLost, setAccessLost] = useState(false);
   const [choosingBot, setChoosingBot] = useState(false);
@@ -36,7 +38,7 @@ export function OpenBotConversations({
       if (pending.current) return;
       const controller = new AbortController();
       pending.current = controller;
-      setStatus("loading");
+      setStatus({ kind: "loading" });
       try {
         const result = await adapter.listConversations({ cursor, signal: controller.signal });
         if (controller.signal.aborted) return;
@@ -54,11 +56,11 @@ export function OpenBotConversations({
                 ]
               : result.conversations,
         }));
-        setStatus("ready");
+        setStatus({ kind: "ready" });
       } catch (error) {
         if (controller.signal.aborted) return;
         if (requiresSignIn(error)) onSessionExpired();
-        else setStatus("failed");
+        else setStatus({ kind: "failed", cursor });
       } finally {
         if (pending.current === controller) pending.current = null;
       }
@@ -133,7 +135,7 @@ export function OpenBotConversations({
           pending.current?.abort();
           pending.current = null;
           setPage(refreshedPage);
-          setStatus("ready");
+          setStatus({ kind: "ready" });
           setChoosingBot(false);
           setAccessLost(false);
           setReconciled(true);
@@ -177,22 +179,20 @@ export function OpenBotConversations({
         </View>
       }
       ListEmptyComponent={
-        status === "ready" && page?.nextCursor === null ? (
+        status.kind === "ready" && page?.nextCursor === null ? (
           <Text style={s.muted}>No conversations yet.</Text>
         ) : null
       }
       ListFooterComponent={
         <View style={{ gap: 8 }}>
-          {status === "loading" && <Loading label="Loading conversations" />}
-          {status === "failed" && (
+          {status.kind === "loading" && <Loading label="Loading conversations" />}
+          {status.kind === "failed" && (
             <>
               <ErrorNotice error="Could not load conversations." />
-              <Button onPress={() => void loadPage(page?.nextCursor ?? undefined)}>
-                Try again
-              </Button>
+              <Button onPress={() => void loadPage(status.cursor)}>Try again</Button>
             </>
           )}
-          {status === "ready" && page?.nextCursor && (
+          {status.kind === "ready" && page?.nextCursor && (
             <Button onPress={() => void loadPage(page.nextCursor ?? undefined)}>Load more</Button>
           )}
         </View>

@@ -98,6 +98,18 @@ export function createOpenBotSession({
     if (!response.ok) throw new Error("Could not verify your OpenBot session.");
     const result = identity.parse(await response.json());
     const expired = () => new Response(null, { status: 401 });
+    async function sendAuthenticated(
+      path: string,
+      init: Omit<SessionRequest, "headers" | "credentials" | "redirect"> & {
+        headers?: HeadersInit;
+      },
+    ) {
+      if (currentTransport !== transport) return expired();
+      const headers = new Headers(init.headers);
+      headers.set("Cookie", credential.sessionCookie);
+      const reply = await send(path, { ...init, headers: Object.fromEntries(headers) });
+      return currentTransport === transport ? reply : expired();
+    }
     const transport: OpenBotTransport = {
       runtimeUrl: `${apiOrigin}/api/copilotkit`,
       async requestRuntime(target, init) {
@@ -113,15 +125,12 @@ export function createOpenBotSession({
         if (init.body != null && typeof init.body !== "string") {
           throw new Error("OpenBot runtime requests require JSON.");
         }
-        const headers = new Headers(init.headers);
-        headers.set("Cookie", credential.sessionCookie);
-        const reply = await send(url.pathname, {
+        return sendAuthenticated(url.pathname, {
           method: init.method === "POST" ? "POST" : undefined,
-          headers: Object.fromEntries(headers),
+          headers: init.headers,
           body: init.body ?? undefined,
           signal: init.signal,
         });
-        return currentTransport === transport ? reply : expired();
       },
       async request(path, init) {
         const url = new URL(path, apiOrigin);
@@ -141,16 +150,12 @@ export function createOpenBotSession({
         if (createConversation && body === undefined) {
           throw new Error("OpenBot conversation creation requires JSON.");
         }
-        if (currentTransport !== transport) return expired();
-        const headers = new Headers(init?.headers);
-        headers.set("Cookie", credential.sessionCookie);
-        const reply = await send(url.pathname + url.search, {
+        return sendAuthenticated(url.pathname + url.search, {
           method: createConversation ? "POST" : undefined,
           body,
-          headers: Object.fromEntries(headers),
+          headers: init?.headers,
           signal: init?.signal,
         });
-        return currentTransport === transport ? reply : expired();
       },
     };
     currentTransport = transport;

@@ -3,7 +3,7 @@ import test from "node:test";
 import { OpenBotAdapter } from "../../../packages/backends/src/openbot";
 import { createOpenBotConversation } from "../src/openbot-create-conversation";
 
-function fixture(outcome: "created" | "lost" | "refused") {
+function fixture(outcome: "created" | "lost" | "refused", pinned = false) {
   const requests: string[] = [];
   let channelCreated = false;
   let listAvailable = true;
@@ -30,7 +30,16 @@ function fixture(outcome: "created" | "lost" | "refused") {
             { status: 201 },
           );
         }
-        assert.equal(path, "/api/channels?limit=30");
+        if (pinned && path === "/api/channels?limit=30") {
+          return Response.json({
+            channels: [{ id: "pinned", name: "Pinned", active: true, agentIds: ["bot-1"] }],
+            nextCursor: "next",
+          });
+        }
+        assert.equal(
+          path,
+          pinned ? "/api/channels?limit=30&cursor=next" : "/api/channels?limit=30",
+        );
         if (!listAvailable) return Response.json({}, { status: 503 });
         return Response.json({
           channels: channelCreated
@@ -103,4 +112,26 @@ test("creation opens the returned Channel and a refusal does not trigger reconci
     code: "refused",
   });
   assert.deepEqual(refused.requests, ["POST /api/channels"]);
+});
+
+test("uncertain creation stays guarded until later pages are checked", async () => {
+  const { adapter, requests, setListAvailable } = fixture("lost", true);
+  const [bot] = await adapter.listBots();
+  assert.ok(bot);
+  setListAvailable(false);
+  assert.deepEqual(await createOpenBotConversation(adapter, { kind: "create", bot }), {
+    kind: "needs_refresh",
+  });
+  setListAvailable(true);
+  assert.deepEqual(await createOpenBotConversation(adapter, { kind: "refresh" }), {
+    kind: "reconciled",
+    page: {
+      conversations: [
+        { channelId: "pinned", title: "Pinned" },
+        { channelId: "channel-1", title: "Research" },
+      ],
+      nextCursor: null,
+    },
+  });
+  assert.equal(requests.filter((request) => request.startsWith("POST")).length, 1);
 });
