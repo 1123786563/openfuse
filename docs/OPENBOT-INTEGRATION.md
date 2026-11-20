@@ -1,5 +1,9 @@
 # OpenBot integration boundary
 
+For native connected mode, see [OpenBot setup on mobile](../apps/mobile/OPENBOT.md) for the compatible server revision and Intelligence gateway requirements.
+
+## Original adapter contract
+
 Inspected September 15, 2026: `CopilotKit/OpenBot` `main` at [`a96d88c6fb75385842529d7db7d463f4a8c4a86e`](https://github.com/CopilotKit/OpenBot/tree/a96d88c6fb75385842529d7db7d463f4a8c4a86e). This is a source inspection, not a running integration. OpenBot is an alpha template whose workspaces are private; depend on public CopilotKit/AG-UI protocols and an HTTP adapter, not OpenBot package imports. [Repository](https://github.com/CopilotKit/OpenBot/blob/a96d88c6fb75385842529d7db7d463f4a8c4a86e/README.md)
 
 ## Recommended OpenFuse configuration
@@ -73,4 +77,4 @@ For a later custom AG-UI agent, preserve opaque `forwardedProps.openbotRun` and 
 
 ## Remaining work
 
-No deployment, session bridge, native transport or live round trip is connected. Next, test sign-in, run/reconnect/stop, browser policy refusal and handover against a pinned deployment. The [roadmap](../ROADMAP.md) also requires mapping scheduled routines and durable task execution before extending the computer infrastructure. Keep Gmail/Calendar integrations in OpenFuse: upstream's catalogue currently ships Drive and Notion. Keep PDF processing in OpenFuse: channel uploads accept selected images and text formats, and reject `application/pdf` with 415. Upstream workspace files and desktop host-folder grants are separate capabilities; neither supplies a native PDF workflow. [Catalogue](https://github.com/CopilotKit/OpenBot/blob/a96d88c6fb75385842529d7db7d463f4a8c4a86e/server/src/plugins/catalogue.ts), [accepted formats](https://github.com/CopilotKit/OpenBot/blob/a96d88c6fb75385842529d7db7d463f4a8c4a86e/shared/attachments.ts#L104)
+The native workspace uses the session bridge described in the mobile setup. Signed-in Expo acceptance still needs to cover sign-in, run recovery, cross-client stopping and approval handoff. Browser policy and handover remain separate adapter work. The [roadmap](../ROADMAP.md) also requires mapping scheduled routines and durable task execution before extending the computer infrastructure. Keep Gmail/Calendar integrations in OpenFuse: upstream's catalogue currently ships Drive and Notion. Keep PDF processing in OpenFuse: channel uploads accept selected images and text formats, and reject `application/pdf` with 415. Upstream workspace files and desktop host-folder grants are separate capabilities; neither supplies a native PDF workflow. [Catalogue](https://github.com/CopilotKit/OpenBot/blob/a96d88c6fb75385842529d7db7d463f4a8c4a86e/server/src/plugins/catalogue.ts), [accepted formats](https://github.com/CopilotKit/OpenBot/blob/a96d88c6fb75385842529d7db7d463f4a8c4a86e/shared/attachments.ts#L104)

@@ -22,6 +22,23 @@ The default API is `http://localhost:8787`, or `http://10.0.2.2:8787` on the And
 
 PDFs use `react-native-pdf` and `react-native-blob-util` in an Expo **development build**. Expo Go does not include these native modules. The config plugins in `app.json` configure the native projects. Web uses the browser’s real PDF reader, with page/zoom controls and download/print access. PDF form fields save a new server artifact.
 
+## OpenBot workspace
+
+Set `EXPO_PUBLIC_OPENBOT_API_ORIGIN` to the HTTPS origin of an OpenBot API
+that supports the OpenFuse sign-in handoff. For a native development build,
+the client also accepts local HTTP origins such as `http://127.0.0.1:3001`
+on an iOS simulator or `http://10.0.2.2:3001` on an Android emulator where
+the build permits cleartext traffic. If OpenBot Web uses a separate origin,
+set `EXPO_PUBLIC_OPENBOT_WEB_ORIGIN` to that deployment's Web origin. The
+approval link opens the system browser and uses the browser's OpenBot session.
+
+Rebuild the native app to include the browser and SecureStore modules.
+Choose **OpenBot workspace** and sign in through the system browser. The
+app verifies the account with OpenBot and stores its own session per API
+origin. **Sign out of OpenBot** ends the native session. The **OpenFuse
+workspace** button returns to standalone mode, and **Choose a workspace**
+in the standalone menu returns to the workspace chooser.
+
 ## Checks
 
 ```sh

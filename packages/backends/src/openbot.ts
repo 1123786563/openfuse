@@ -1,6 +1,7 @@
+import { MessageSchema } from "@ag-ui/core";
 import { z } from "zod";
 
-/** Verified against OpenBot a96d88c6 and its public CopilotKit runtime 1.70.1. */
+/** Original adapter contract reference. See mobile/OPENBOT.md for connected-mode requirements. */
 export const OPENBOT_CONTRACT_REF = "a96d88c6fb75385842529d7db7d463f4a8c4a86e";
 
 /**
@@ -10,12 +11,14 @@ export const OPENBOT_CONTRACT_REF = "a96d88c6fb75385842529d7db7d463f4a8c4a86e";
  */
 export interface OpenBotTransport {
   runtimeUrl: string;
-  request(path: string, init?: RequestInit): Promise<Response>;
+  requestRuntime?(url: string, init: RequestInit): Promise<Response>;
+  request(path: string, init?: RequestInit): Promise<Pick<Response, "ok" | "status" | "json">>;
 }
 
 export type OpenBotErrorCode =
   | "disabled"
   | "not_configured"
+  | "unsupported_gateway"
   | "invalid_input"
   | "invalid_response"
   | "authentication_required"
@@ -23,6 +26,17 @@ export type OpenBotErrorCode =
   | "http_error"
   | "unavailable"
   | "cancelled";
+
+export function openBotHttpErrorCode(status: number): OpenBotErrorCode {
+  switch (status) {
+    case 401:
+      return "authentication_required";
+    case 403:
+      return "refused";
+    default:
+      return "http_error";
+  }
+}
 
 export class OpenBotError extends Error {
   constructor(
@@ -82,8 +96,68 @@ const navigationSchema = z.object({
   truncated: z.boolean(),
   elapsedMs: z.number().nonnegative(),
 });
+const channelListEntry = z.object({
+  id: nonempty.brand<"OpenBotChannelId">(),
+  name: nonempty,
+  active: z.boolean(),
+  agentIds: z.array(nonempty),
+  summary: z.string().nullish(),
+  opening: z.string().nullish(),
+});
+const botRoster = z.object({
+  agents: z.array(z.object({ id: nonempty.brand<"OpenBotAgentId">(), name: nonempty })),
+});
 const channelSchema = z.object({
-  channel: z.object({ id: nonempty, threadId: nonempty, agentIds: z.array(nonempty).min(1) }),
+  channel: channelListEntry.pick({ id: true }).extend({
+    threadId: nonempty.brand<"OpenBotThreadId">(),
+    agentIds: z.array(nonempty).min(1),
+  }),
+});
+const channelPage = z.object({
+  channels: z.array(channelListEntry),
+  nextCursor: nonempty.nullable(),
+});
+const openedChannel = z.object({
+  channel: channelListEntry.pick({ id: true, active: true, agentIds: true }).extend({
+    threadId: nonempty.brand<"OpenBotThreadId">(),
+    lastMessageAt: z.string().nullable(),
+  }),
+});
+const userContent = z.union([
+  z.string(),
+  z.array(
+    z.discriminatedUnion("type", [
+      z.looseObject({ type: z.literal("text"), text: z.string() }),
+      z.looseObject({ type: z.literal("image") }),
+      z.looseObject({ type: z.literal("audio") }),
+      z.looseObject({ type: z.literal("video") }),
+      z.looseObject({ type: z.literal("document") }),
+      z.looseObject({ type: z.literal("binary") }),
+    ]),
+  ),
+]);
+const threadHistory = z.object({
+  messages: z.array(
+    z.discriminatedUnion("role", [
+      z.looseObject({ id: nonempty, role: z.literal("user"), content: userContent }),
+      z.looseObject({ id: nonempty, role: z.literal("assistant"), content: z.string().nullish() }),
+      z.looseObject({
+        id: nonempty,
+        role: z.enum(["tool", "system", "developer", "activity", "reasoning"]),
+      }),
+    ]),
+  ),
+});
+export type OpenBotChannelId = z.infer<typeof channelListEntry>["id"];
+type OpenBotThreadId = z.infer<typeof openedChannel>["channel"]["threadId"];
+const approvalInbox = z.object({
+  requests: z.array(
+    z.object({
+      id: nonempty,
+      status: z.enum(["pending", "approved", "denied", "consumed", "completed"]),
+      action: z.object({ threadId: z.string() }),
+    }),
+  ),
 });
 const errorSchema = z.object({ error: z.string().optional(), rule: z.string().optional() });
 
@@ -148,6 +222,108 @@ export class OpenBotAdapter {
       if (error.code === "authentication_required") return { state: "authentication_required" };
       return { state: "unavailable", reason: error.message };
     }
+  }
+
+  async listBots(signal?: AbortSignal) {
+    const { agents } = await this.json("/api/agents", botRoster, { signal });
+    return agents;
+  }
+
+  async listConversations({ cursor, signal }: { cursor?: string; signal?: AbortSignal }) {
+    const query = new URLSearchParams({ limit: "30" });
+    if (cursor !== undefined) query.set("cursor", cursor);
+    const page = await this.json(`/api/channels?${query}`, channelPage, { signal });
+    return {
+      conversations: page.channels
+        .filter((channel) => channel.active && channel.agentIds.length === 1)
+        .map((channel) => ({
+          channelId: channel.id,
+          title: channel.summary || channel.opening || channel.name,
+        })),
+      nextCursor: page.nextCursor,
+    };
+  }
+
+  async openConversation(channelId: OpenBotChannelId, signal?: AbortSignal) {
+    const id = identifier(channelId);
+    const channel = await this.readDirectChannel(id, signal);
+    const { messages } = await this.json(
+      `/api/copilotkit/threads/${encodeURIComponent(identifier(channel.threadId))}/messages?agentId=${encodeURIComponent(identifier(channel.agentId))}`,
+      threadHistory,
+      { signal },
+    ).catch(async (error: unknown) => {
+      if (!(error instanceof OpenBotError) || error.status !== 404) throw error;
+      const current = await this.readDirectChannel(id, signal);
+      // Intelligence creates the Thread on its first run. Confirm the mapping survived the
+      // history request, and report an error if the Channel already has recorded activity.
+      if (
+        error.message === "Failed to fetch thread messages" &&
+        channel.threadId === current.threadId &&
+        channel.agentId === current.agentId &&
+        channel.lastMessageAt === null &&
+        current.lastMessageAt === null
+      ) {
+        return { messages: [] };
+      }
+      throw new OpenBotError("unavailable", "Could not load OpenBot conversation history.");
+    });
+    let hasNonTextMessages = false;
+    const transcript = messages.flatMap((message) => {
+      if (message.role !== "user" && message.role !== "assistant") {
+        hasNonTextMessages = true;
+        return [];
+      }
+      const { id, role, content } = message;
+      const text = Array.isArray(content)
+        ? content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
+        : content;
+      if (!text || (Array.isArray(content) && content.some((part) => part.type !== "text"))) {
+        hasNonTextMessages = true;
+      }
+      return text ? [{ id, role, text }] : [];
+    });
+    const runMessages = MessageSchema.array().safeParse(
+      messages.map((message) =>
+        message.role === "assistant" && message.content === null
+          ? { ...message, content: undefined }
+          : message,
+      ),
+    );
+    return {
+      channelId: channel.id,
+      threadId: channel.threadId,
+      agentId: channel.agentId,
+      runMessages: runMessages.success ? runMessages.data : null,
+      messages: transcript,
+      hasNonTextMessages,
+    };
+  }
+
+  async listUnsettledApprovals(threadId: OpenBotThreadId, signal?: AbortSignal) {
+    const query = new URLSearchParams({ threadId });
+    const { requests } = await this.json(`/api/approvals?${query}`, approvalInbox, { signal });
+    return requests
+      .filter((request) => request.action.threadId === threadId && request.status !== "completed")
+      .map(({ id, status }) => ({ id, status }));
+  }
+
+  private async readDirectChannel(id: string, signal?: AbortSignal) {
+    const { channel } = await this.json(`/api/channels/${encodeURIComponent(id)}`, openedChannel, {
+      signal,
+    }).catch((error: unknown) => {
+      if (error instanceof OpenBotError && error.status === 404) {
+        throw new OpenBotError("refused", "This OpenBot conversation is unavailable.", 404);
+      }
+      throw error;
+    });
+    if (channel.id !== id) {
+      throw new OpenBotError("invalid_response", "OpenBot returned a different Channel.");
+    }
+    const [agentId] = channel.agentIds;
+    if (!channel.active || channel.agentIds.length !== 1 || !agentId) {
+      throw new OpenBotError("refused", "This OpenBot conversation is unavailable.");
+    }
+    return { ...channel, agentId };
   }
 
   async createConversation(agentId: string, signal?: AbortSignal) {
@@ -262,7 +438,7 @@ export class OpenBotAdapter {
     const transport = this.requireTransport();
     if (init.signal?.aborted)
       throw new OpenBotError("cancelled", "OpenBot request cancelled before dispatch.");
-    let response: Response;
+    let response: Awaited<ReturnType<OpenBotTransport["request"]>>;
     try {
       response = await transport.request(path, {
         ...init,
@@ -286,14 +462,8 @@ export class OpenBotAdapter {
     const body: unknown = await response.json().catch(() => undefined);
     if (!response.ok) {
       const detail = errorSchema.safeParse(body);
-      const code =
-        response.status === 401
-          ? "authentication_required"
-          : response.status === 403
-            ? "refused"
-            : "http_error";
       throw new OpenBotError(
-        code,
+        openBotHttpErrorCode(response.status),
         detail.success && detail.data.error
           ? detail.data.error.slice(0, 1000)
           : `OpenBot request failed (${response.status}).`,
