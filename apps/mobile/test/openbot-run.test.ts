@@ -74,7 +74,7 @@ for (const scenario of ["lost response", "conflict"] as const) {
       pending: null,
     });
     assert.deepEqual(steps, ["history", "run", "history", "connect", "history"]);
-    assert.deepEqual(result.unconfirmed, scenario === "conflict" ? outgoing : null);
+    assert.equal(result.unconfirmed, null);
     if (scenario === "lost response") {
       steps.length = 0;
       const review = await syncOpenBotRun({
@@ -346,16 +346,53 @@ test("the native client identifies both gateway proxy configurations before star
     } = await adapter.listConversations({});
     assert.ok(channel);
     const history = await adapter.openConversation(channel.channelId);
+    let reads = 0;
     await assert.rejects(
-      observeOpenBotRun({
-        history,
-        transport,
-        signal,
+      syncOpenBotRun({
+        read: async () => {
+          reads++;
+          return history;
+        },
+        observe: (history, send) =>
+          observeOpenBotRun({
+            history,
+            transport,
+            signal,
+            send,
+            onMessages() {},
+            onRun() {},
+            onSendDispatch: () => assert.fail("Proxy configuration must block dispatch"),
+          }),
         send: outgoing,
-        onMessages() {},
-        onRun() {},
+        pending: null,
       }),
       { code: "unsupported_gateway" },
     );
+    assert.equal(reads, 1);
   }
+});
+
+test("reopened chat observes a pending send without posting the edited draft", async () => {
+  const history = await openStopTarget("bot", "thread");
+  const edited = { id: "edited", text: "An edited draft" };
+  const sent: (typeof outgoing)[] = [];
+  const observe = async (_history: typeof history, send?: typeof outgoing) => {
+    if (send) sent.push(send);
+    return { streamFailed: false };
+  };
+
+  const reopened = await syncOpenBotRun({
+    read: async () => history,
+    observe,
+    pending: outgoing,
+  });
+  assert.deepEqual(reopened.unconfirmed, outgoing);
+  const afterEdit = await syncOpenBotRun({
+    read: async () => history,
+    observe,
+    send: edited,
+    pending: reopened.unconfirmed,
+  });
+  assert.deepEqual(sent, []);
+  assert.deepEqual(afterEdit.unconfirmed, outgoing);
 });

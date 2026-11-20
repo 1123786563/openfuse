@@ -24,9 +24,15 @@ type RunObservation = {
   stoppingRunId: string | null;
 };
 
+export type OpenBotComposer = {
+  draft: string;
+  pending: OpenBotSend | null;
+};
+
 export function OpenBotChat({
   adapter,
   channelId,
+  composer,
   webOrigin,
   transport,
   onSessionExpired,
@@ -34,6 +40,7 @@ export function OpenBotChat({
 }: {
   adapter: OpenBotAdapter;
   channelId: OpenBotChannelId;
+  composer: OpenBotComposer;
   webOrigin: string;
   transport: OpenBotTransport;
   onSessionExpired: () => void;
@@ -41,14 +48,21 @@ export function OpenBotChat({
 }) {
   const [history, setHistory] = useState<OpenBotHistory | null>(null);
   const [messages, setMessages] = useState<OpenBotHistory["messages"]>([]);
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState(composer.draft);
+  const updateDraft = useCallback(
+    (text: string) => {
+      composer.draft = text;
+      setDraft(text);
+    },
+    [composer],
+  );
   const [state, setState] = useState<
     | { kind: "checking" | "ready" | "offline" }
     | { kind: "running"; runId: string; stop: "available" | "pending" | "failed" }
     | { kind: "unconfirmed"; send: OpenBotSend }
+    | { kind: "unsupported"; message: string }
   >({ kind: "checking" });
   const [runFailed, setRunFailed] = useState(false);
-  const pendingSend = useRef<OpenBotSend | null>(null);
   const displayedThread = useRef<string | null>(null);
   const operation = useRef<RunObservation | null>(null);
   const scroll = useRef<ScrollView>(null);
@@ -64,7 +78,7 @@ export function OpenBotChat({
       };
       operation.current = current;
       const { signal } = controller;
-      const pending = pendingSend.current;
+      const pending = composer.pending;
       setState({ kind: "checking" });
       setRunFailed(false);
       const read = async () => {
@@ -84,6 +98,12 @@ export function OpenBotChat({
           transport,
           signal,
           send: outgoing,
+          onSendDispatch: outgoing
+            ? () => {
+                composer.pending = outgoing;
+                if (composer.draft.trim() === outgoing.text) updateDraft("");
+              }
+            : undefined,
           onMessages: setMessages,
           onRun: (runId) => {
             current.runId = runId;
@@ -102,36 +122,51 @@ export function OpenBotChat({
       try {
         const { unconfirmed, streamFailed } = await syncOpenBotRun({
           read,
-          observe: (saved, outgoing) => {
-            if (outgoing) {
-              pendingSend.current = outgoing;
-              setDraft((draft) => (draft.trim() === outgoing.text ? "" : draft));
+          observe: async (saved, outgoing) => {
+            try {
+              return await observe(saved, outgoing);
+            } catch (error) {
+              if (
+                outgoing &&
+                composer.pending === outgoing &&
+                error instanceof OpenBotError &&
+                (error.code === "authentication_required" ||
+                  error.code === "refused" ||
+                  error.status === 409)
+              ) {
+                composer.pending = null;
+                if (!composer.draft) {
+                  composer.draft = outgoing.text;
+                  if (!signal.aborted) setDraft(outgoing.text);
+                }
+              }
+              throw error;
             }
-            return observe(saved, outgoing);
           },
           send,
           pending,
         });
         if (signal.aborted) return false;
-        if (send && pending?.text === send.text && !unconfirmed) {
-          setDraft((draft) => (draft.trim() === send.text ? "" : draft));
-        }
-        pendingSend.current = unconfirmed;
+        if (!unconfirmed) composer.pending = null;
         setRunFailed(streamFailed);
-        setState(unconfirmed ? { kind: "unconfirmed", send: unconfirmed } : { kind: "ready" });
+        setState(
+          composer.pending ? { kind: "unconfirmed", send: composer.pending } : { kind: "ready" },
+        );
         return true;
       } catch (error) {
         if (signal.aborted) return false;
         if (error instanceof OpenBotError && error.code === "authentication_required")
           onSessionExpired();
         else if (error instanceof OpenBotError && error.code === "refused") onAccessLost(channelId);
+        else if (error instanceof OpenBotError && error.code === "unsupported_gateway")
+          setState({ kind: "unsupported", message: error.message });
         else setState({ kind: "offline" });
         return false;
       } finally {
         if (operation.current === current) operation.current = null;
       }
     },
-    [adapter, channelId, onAccessLost, onSessionExpired, transport],
+    [adapter, channelId, composer, onAccessLost, onSessionExpired, transport, updateDraft],
   );
 
   const stop = async (runId: string, saved: OpenBotHistory) => {
@@ -246,21 +281,22 @@ export function OpenBotChat({
           <Button onPress={() => void sync()}>Reconnect</Button>
         </>
       )}
+      {state.kind === "unsupported" && (
+        <>
+          <ErrorNotice error={state.message} />
+          <Button onPress={() => void sync()}>Reconnect</Button>
+        </>
+      )}
       {runFailed && (
         <ErrorNotice error="The Bot reply was interrupted. The transcript shows the saved conversation." />
       )}
       {state.kind === "unconfirmed" && (
         <>
-          <ErrorNotice error="OpenBot history does not contain your last send. Check the conversation before trying again." />
+          <ErrorNotice error="Your last send is awaiting confirmation. You can edit a draft while OpenBot checks the conversation." />
+          <Text selectable style={s.text}>
+            {state.send.text}
+          </Text>
           <Button onPress={() => void sync()}>Check again</Button>
-          <Button
-            onPress={() => {
-              setDraft((current) => current || state.send.text);
-              setState({ kind: "ready" });
-            }}
-          >
-            Review unsent text
-          </Button>
         </>
       )}
       {history?.runMessages === null && (
@@ -271,8 +307,8 @@ export function OpenBotChat({
         placeholder="Message"
         multiline
         value={draft}
-        onChangeText={setDraft}
-        editable={sendEnabled}
+        onChangeText={updateDraft}
+        editable={sendEnabled || state.kind === "unconfirmed"}
         style={[s.input, { maxHeight: 100 }]}
       />
       <Button

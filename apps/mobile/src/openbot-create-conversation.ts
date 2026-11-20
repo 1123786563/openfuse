@@ -10,17 +10,30 @@ type Result =
   | { kind: "reconciled"; page: Page }
   | { kind: "needs_refresh" };
 
+// The adapter belongs to one signed-in workspace. The Channel list cannot
+// correlate an entry to a POST whose response was lost.
+const unresolvedCreations = new WeakSet<OpenBotAdapter>();
+
+export function hasUnresolvedOpenBotCreation(adapter: OpenBotAdapter) {
+  return unresolvedCreations.has(adapter);
+}
+
 export async function createOpenBotConversation(
   adapter: OpenBotAdapter,
   action: OpenBotCreateAction,
   signal?: AbortSignal,
 ): Promise<Result> {
-  if (action.kind === "create") {
+  if (action.kind === "create" && !hasUnresolvedOpenBotCreation(adapter)) {
+    unresolvedCreations.add(adapter);
     try {
       const { channelId } = await adapter.createConversation(action.bot.id, signal);
+      unresolvedCreations.delete(adapter);
       return { kind: "created", conversation: { channelId, title: action.bot.name } };
     } catch (error) {
-      if (!(error instanceof OpenBotError) || !error.outcomeUnknown || signal?.aborted) throw error;
+      if (error instanceof OpenBotError && !error.outcomeUnknown) {
+        unresolvedCreations.delete(adapter);
+        throw error;
+      }
     }
   }
 

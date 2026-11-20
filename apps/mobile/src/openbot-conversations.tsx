@@ -3,7 +3,8 @@ import { ActivityIndicator, AppState, FlatList, Text, View } from "react-native"
 import type { OpenBotTransport } from "../../../packages/backends/src/openbot";
 import { OpenBotAdapter, OpenBotError } from "../../../packages/backends/src/openbot";
 import { OpenBotBotPicker } from "./openbot-bot-picker";
-import { OpenBotChat } from "./openbot-chat";
+import { OpenBotChat, type OpenBotComposer } from "./openbot-chat";
+import { hasUnresolvedOpenBotCreation } from "./openbot-create-conversation";
 import { Button, colors, ErrorNotice, s } from "./ui";
 
 type Page = Awaited<ReturnType<OpenBotAdapter["listConversations"]>>;
@@ -27,10 +28,13 @@ export function OpenBotConversations({
   const [status, setStatus] = useState<
     { kind: "loading" | "ready" } | { kind: "failed"; cursor: string | undefined }
   >({ kind: "loading" });
-  const [selected, setSelected] = useState<Conversation | null>(null);
+  const [selected, setSelected] = useState<{
+    conversation: Conversation;
+    composer: OpenBotComposer;
+  } | null>(null);
   const [accessLost, setAccessLost] = useState(false);
   const [choosingBot, setChoosingBot] = useState(false);
-  const [reconciled, setReconciled] = useState(false);
+  const composers = useRef(new Map<Conversation["channelId"], OpenBotComposer>());
   const pending = useRef<AbortController | null>(null);
 
   const loadPage = useCallback(
@@ -96,18 +100,27 @@ export function OpenBotConversations({
     );
   }, []);
 
+  const openConversation = (conversation: Conversation) => {
+    const composer = composers.current.get(conversation.channelId) ?? { draft: "", pending: null };
+    composers.current.set(conversation.channelId, composer);
+    setAccessLost(false);
+    setSelected({ conversation, composer });
+  };
+
   if (selected) {
+    const { conversation, composer } = selected;
     return (
-      <View key={selected.channelId} style={{ flex: 1, gap: 12 }}>
+      <View key={conversation.channelId} style={{ flex: 1, gap: 12 }}>
         <Button small onPress={() => setSelected(null)}>
           Back to conversations
         </Button>
         <Text accessibilityRole="header" style={s.heading}>
-          {selected.title}
+          {conversation.title}
         </Text>
         <OpenBotChat
           adapter={adapter}
-          channelId={selected.channelId}
+          channelId={conversation.channelId}
+          composer={composer}
           webOrigin={webOrigin}
           transport={transport}
           onAccessLost={onAccessLost}
@@ -126,9 +139,7 @@ export function OpenBotConversations({
           pending.current?.abort();
           pending.current = null;
           setChoosingBot(false);
-          setAccessLost(false);
-          setReconciled(false);
-          setSelected(conversation);
+          openConversation(conversation);
           void loadPage();
         }}
         onReconciled={(refreshedPage) => {
@@ -138,13 +149,13 @@ export function OpenBotConversations({
           setStatus({ kind: "ready" });
           setChoosingBot(false);
           setAccessLost(false);
-          setReconciled(true);
         }}
         onSessionExpired={onSessionExpired}
       />
     );
   }
 
+  const creationUnresolved = hasUnresolvedOpenBotCreation(adapter);
   return (
     <FlatList
       style={{ flex: 1 }}
@@ -152,28 +163,25 @@ export function OpenBotConversations({
       data={page?.conversations ?? []}
       keyExtractor={(item) => item.channelId}
       renderItem={({ item }) => (
-        <Button
-          onPress={() => {
-            setAccessLost(false);
-            setSelected(item);
-          }}
-        >
-          {item.title}
-        </Button>
+        <Button onPress={() => openConversation(item)}>{item.title}</Button>
       )}
       ListHeaderComponent={
         <View style={{ gap: 10 }}>
           <Text accessibilityRole="header" style={s.heading}>
             Conversations
           </Text>
-          <Button primary onPress={() => setChoosingBot(true)}>
-            New conversation
-          </Button>
-          {reconciled && (
-            <Text accessibilityLiveRegion="polite" style={s.muted}>
-              The conversation may have been created. Check the refreshed list before starting
-              another.
-            </Text>
+          {creationUnresolved ? (
+            <>
+              <Text accessibilityLiveRegion="polite" style={s.muted}>
+                OpenBot may have created the conversation. You can open it from the list if it
+                appears. Creation is paused for this workspace session.
+              </Text>
+              <Button onPress={() => void loadPage()}>Refresh conversations</Button>
+            </>
+          ) : (
+            <Button primary onPress={() => setChoosingBot(true)}>
+              New conversation
+            </Button>
           )}
           {accessLost && <ErrorNotice error="You can no longer access this conversation." />}
         </View>

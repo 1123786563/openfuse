@@ -184,7 +184,9 @@ export async function observeOpenBotRun({
 
 /** A send has landed only when the durable transcript contains its exact message ID. */
 export function unconfirmedOpenBotSend(send: OpenBotSend | null, history: OpenBotHistory) {
-  return send && !history.messages.some(({ id }) => id === send.id) ? send : null;
+  return send && !history.messages.some(({ id, role }) => role === "user" && id === send.id)
+    ? send
+    : null;
 }
 
 export async function syncOpenBotRun({
@@ -201,23 +203,25 @@ export async function syncOpenBotRun({
   const saved = await read();
   let streamFailed = false;
   let beforeJoin = saved;
-  let unresolved = pending;
-  // A previous send may have appeared after the user opened the draft for review.
-  if (
-    send &&
-    saved.runMessages &&
-    (!pending || send.text !== pending.text || unconfirmedOpenBotSend(pending, saved))
-  ) {
+  let unresolved = unconfirmedOpenBotSend(pending, saved);
+  // An unresolved write blocks another send, even if the user edited the draft.
+  if (send && saved.runMessages && !unresolved && send.text !== pending?.text) {
     unresolved = send;
     try {
       ({ streamFailed } = await observe(saved, send));
     } catch (error) {
-      if (
-        error instanceof OpenBotError &&
-        (error.code === "authentication_required" || error.code === "refused")
-      )
-        throw error;
-      // A request with a lost response or an occupied thread is reconciled by joining.
+      if (error instanceof OpenBotError) {
+        if (
+          error.code === "authentication_required" ||
+          error.code === "refused" ||
+          error.code === "unsupported_gateway"
+        ) {
+          throw error;
+        }
+        // The runtime rejected this send because the Thread already has an active run.
+        if (error.status === 409) unresolved = null;
+      }
+      // Join an existing run after a lock conflict or a lost response.
     }
     beforeJoin = await read();
   }

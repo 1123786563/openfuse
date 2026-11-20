@@ -7,6 +7,7 @@ function fixture(outcome: "created" | "lost" | "refused", pinned = false) {
   const requests: string[] = [];
   let channelCreated = false;
   let listAvailable = true;
+  let channelVisible = true;
   const adapter = new OpenBotAdapter({
     enabled: true,
     transport: {
@@ -42,9 +43,10 @@ function fixture(outcome: "created" | "lost" | "refused", pinned = false) {
         );
         if (!listAvailable) return Response.json({}, { status: 503 });
         return Response.json({
-          channels: channelCreated
-            ? [{ id: "channel-1", name: "Research", active: true, agentIds: ["bot-1"] }]
-            : [],
+          channels:
+            channelCreated && channelVisible
+              ? [{ id: "channel-1", name: "Research", active: true, agentIds: ["bot-1"] }]
+              : [],
           nextCursor: null,
         });
       },
@@ -53,6 +55,9 @@ function fixture(outcome: "created" | "lost" | "refused", pinned = false) {
   return {
     adapter,
     requests,
+    setChannelVisible: (visible: boolean) => {
+      channelVisible = visible;
+    },
     setListAvailable: (available: boolean) => {
       listAvailable = available;
     },
@@ -133,5 +138,23 @@ test("uncertain creation stays guarded until later pages are checked", async () 
       nextCursor: null,
     },
   });
+  assert.equal(requests.filter((request) => request.startsWith("POST")).length, 1);
+});
+
+test("reopening creation after a delayed Channel stays read-only, even after it appears", async () => {
+  const { adapter, requests, setChannelVisible } = fixture("lost");
+  const [bot] = await adapter.listBots();
+  assert.ok(bot);
+  setChannelVisible(false);
+  assert.deepEqual(await createOpenBotConversation(adapter, { kind: "create", bot }), {
+    kind: "reconciled",
+    page: { conversations: [], nextCursor: null },
+  });
+
+  // Starting again after returning from the picker must only refresh.
+  await createOpenBotConversation(adapter, { kind: "create", bot });
+  setChannelVisible(true);
+  const refreshed = await createOpenBotConversation(adapter, { kind: "create", bot });
+  assert.equal(refreshed.kind, "reconciled");
   assert.equal(requests.filter((request) => request.startsWith("POST")).length, 1);
 });
