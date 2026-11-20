@@ -31,7 +31,7 @@ export type OpenBotSessionOptions = {
   };
   createProof: () => Promise<{ state: string; verifier: string; challenge: string }>;
   openBrowser: (url: string) => Promise<string | null>;
-  request: (url: string, init: SessionRequest) => Promise<Pick<Response, "ok" | "status" | "json">>;
+  request: (url: string, init: SessionRequest) => Promise<Response>;
 };
 
 export function parseOpenBotOrigin(value: string, allowLocalHttp = false) {
@@ -97,9 +97,32 @@ export function createOpenBotSession({
     }
     if (!response.ok) throw new Error("Could not verify your OpenBot session.");
     const result = identity.parse(await response.json());
-    const expired = { status: 401, ok: false, json: async () => undefined };
+    const expired = () => new Response(null, { status: 401 });
     const transport: OpenBotTransport = {
       runtimeUrl: `${apiOrigin}/api/copilotkit`,
+      async requestRuntime(target, init) {
+        const url = new URL(target);
+        const allowed =
+          ((!init.method || init.method === "GET") && url.pathname === "/api/copilotkit/info") ||
+          (init.method === "POST" &&
+            /^\/api\/copilotkit\/agent\/[^/]+\/(run|connect)$/.test(url.pathname));
+        if (url.origin !== apiOrigin || url.username || url.password || !allowed) {
+          throw new Error("Invalid OpenBot runtime request.");
+        }
+        if (currentTransport !== transport) return expired();
+        if (init.body != null && typeof init.body !== "string") {
+          throw new Error("OpenBot runtime requests require JSON.");
+        }
+        const headers = new Headers(init.headers);
+        headers.set("Cookie", credential.sessionCookie);
+        const reply = await send(url.pathname, {
+          method: init.method === "POST" ? "POST" : undefined,
+          headers: Object.fromEntries(headers),
+          body: init.body ?? undefined,
+          signal: init.signal,
+        });
+        return currentTransport === transport ? reply : expired();
+      },
       async request(path, init) {
         const url = new URL(path, apiOrigin);
         if (
@@ -112,14 +135,14 @@ export function createOpenBotSession({
         if (init?.method && init.method !== "GET") {
           throw new Error("The connected workspace transport supports reads.");
         }
-        if (currentTransport !== transport) return expired;
+        if (currentTransport !== transport) return expired();
         const headers = new Headers(init?.headers);
         headers.set("Cookie", credential.sessionCookie);
         const reply = await send(url.pathname + url.search, {
           headers: Object.fromEntries(headers),
           signal: init?.signal,
         });
-        return currentTransport === transport ? reply : expired;
+        return currentTransport === transport ? reply : expired();
       },
     };
     currentTransport = transport;

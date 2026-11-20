@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ActivityIndicator, AppState, Text, View } from "react-native";
+import { ActivityIndicator, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { OpenBotConversations } from "./openbot-conversations";
 import { configureOpenBotSession } from "./openbot-native";
@@ -66,15 +66,6 @@ function OpenBotSessionPanel({
   useEffect(() => {
     void run("restore");
   }, [run]);
-
-  const connected = screen.kind === "connected";
-  useEffect(() => {
-    if (!connected) return;
-    const subscription = AppState.addEventListener("change", (state) => {
-      if (state === "active") void run("restore");
-    });
-    return () => subscription.remove();
-  }, [connected, run]);
 
   const onSessionExpired = useCallback(() => void run("restore"), [run]);
   if (screen.kind === "connected") {

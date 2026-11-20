@@ -49,7 +49,7 @@ export function configureOpenBotSession() {
         const response = await fetch(url, { ...init, signal: abort.signal });
         // Drain the body while the deadline is active as well.
         const body = await response.text();
-        return { ok: response.ok, status: response.status, json: async () => JSON.parse(body) };
+        return new Response(body || null, { status: response.status, headers: response.headers });
       } finally {
         signal?.removeEventListener("abort", cancel);
         clearTimeout(timer);

@@ -180,6 +180,10 @@ test("switching accounts invalidates A's in-flight history and B cannot open A's
           return accountA
             ? Response.json({ channel: privateChannel })
             : new Response(null, { status: 404 });
+        case "/api/copilotkit/agent/bot/connect":
+          return accountA
+            ? Response.json({ threadId: "thread-a", runId: "run-a" })
+            : new Response(null, { status: 403 });
         case "/api/copilotkit/threads/thread-a/messages":
           if (!accountA) return new Response(null, { status: 403 });
           startHistory();
@@ -197,6 +201,17 @@ test("switching accounts invalidates A's in-flight history and B cannot open A's
     conversations: [listed],
   } = await adapterA.listConversations({});
   assert.ok(listed);
+  const join = {
+    method: "POST",
+    body: JSON.stringify({ threadId: "thread-a" }),
+  };
+  const connectUrl = `${apiOrigin}/api/copilotkit/agent/bot/connect`;
+  assert.equal(
+    await (await a.transport.requestRuntime?.(connectUrl, join))
+      ?.json()
+      .then((response) => response.runId),
+    "run-a",
+  );
   const pending = assert.rejects(adapterA.openConversation(listed.channelId), { status: 401 });
   await historyStarted;
   await session.signOut();
@@ -210,8 +225,37 @@ test("switching accounts invalidates A's in-flight history and B cannot open A's
     (await b.transport.request("/api/copilotkit/threads/thread-a/messages?agentId=bot")).status,
     403,
   );
+  assert.equal((await b.transport.requestRuntime?.(connectUrl, join))?.status, 403);
+  assert.equal((await a.transport.requestRuntime?.(connectUrl, join))?.status, 401);
   finishHistory(Response.json({ messages: [{ id: "1", role: "user", content: "Private" }] }));
   await pending;
   await assert.rejects(adapterA.listConversations({}), { status: 401 });
   await assert.rejects(b.transport.request("//other.example/api/channels"));
+});
+
+test("the SDK transport scopes runtime requests to the signed-in OpenBot origin", async () => {
+  const requests: string[] = [];
+  const { session } = fixture({
+    request: async (url, init) => {
+      const path = new URL(url).pathname;
+      if (path === "/api/auth/openfuse/exchange") return Response.json({ sessionCookie });
+      if (path === "/api/me") return Response.json({ user: { id: "person-1" } });
+      requests.push(path);
+      assert.equal(init.credentials, "omit");
+      assert.equal(init.redirect, "error");
+      assert.equal(new Headers(init.headers).get("Cookie"), sessionCookie);
+      return new Response(null, { status: 204 });
+    },
+  });
+  const connected = await session.signIn();
+  assert.equal(connected.kind, "connected");
+  const request = connected.transport.requestRuntime;
+  assert.ok(request);
+  const path = "/api/copilotkit/agent/bot/connect";
+  await assert.rejects(request(`https://other.example${path}`, { method: "POST" }));
+  await assert.rejects(request(`${apiOrigin}/api/copilotkit/agent/bot/stop`, { method: "POST" }));
+  assert.equal((await request(`${apiOrigin}${path}`, { method: "POST", body: "{}" })).status, 204);
+  await session.restore();
+  assert.equal((await request(`${apiOrigin}${path}`, { method: "POST" })).status, 401);
+  assert.deepEqual(requests, [path]);
 });
