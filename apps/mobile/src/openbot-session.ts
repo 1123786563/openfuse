@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { OpenBotTransport } from "../../../packages/backends/src/openbot";
 
 export const openBotRedirectUri = "openfuse://auth/callback";
 
@@ -13,12 +14,13 @@ type SessionRequest = Pick<RequestInit, "credentials" | "redirect"> & {
   body?: string;
   headers?: Record<string, string>;
   method?: "POST";
+  signal?: AbortSignal | null;
 };
 
 export type OpenBotSessionState =
   | { kind: "signed-out" }
   | { kind: "expired" }
-  | { kind: "connected"; user: z.infer<typeof identity>["user"] };
+  | { kind: "connected"; user: z.infer<typeof identity>["user"]; transport: OpenBotTransport };
 
 export type OpenBotSessionOptions = {
   apiOrigin: string;
@@ -56,6 +58,8 @@ export function createOpenBotSession({
   openBrowser,
   request,
 }: OpenBotSessionOptions) {
+  let currentTransport: OpenBotTransport | undefined;
+
   async function send(path: string, init: SessionRequest) {
     return request(apiOrigin + path, { ...init, credentials: "omit", redirect: "error" });
   }
@@ -79,6 +83,7 @@ export function createOpenBotSession({
   }
 
   async function restore(): Promise<OpenBotSessionState> {
+    currentTransport = undefined;
     const credential = await readCredential();
     if (!credential) return { kind: "signed-out" };
     return credential.signingOut ? revoke(credential) : verify(credential);
@@ -92,7 +97,33 @@ export function createOpenBotSession({
     }
     if (!response.ok) throw new Error("Could not verify your OpenBot session.");
     const result = identity.parse(await response.json());
-    return { kind: "connected", user: result.user };
+    const expired = { status: 401, ok: false, json: async () => undefined };
+    const transport: OpenBotTransport = {
+      runtimeUrl: `${apiOrigin}/api/copilotkit`,
+      async request(path, init) {
+        const url = new URL(path, apiOrigin);
+        if (
+          !path.startsWith("/api/") ||
+          url.origin !== apiOrigin ||
+          !url.pathname.startsWith("/api/")
+        ) {
+          throw new Error("OpenBot requests must stay on the configured API origin.");
+        }
+        if (init?.method && init.method !== "GET") {
+          throw new Error("The connected workspace transport supports reads.");
+        }
+        if (currentTransport !== transport) return expired;
+        const headers = new Headers(init?.headers);
+        headers.set("Cookie", credential.sessionCookie);
+        const reply = await send(url.pathname + url.search, {
+          headers: Object.fromEntries(headers),
+          signal: init?.signal,
+        });
+        return currentTransport === transport ? reply : expired;
+      },
+    };
+    currentTransport = transport;
+    return { kind: "connected", user: result.user, transport };
   }
 
   return {
@@ -142,6 +173,7 @@ export function createOpenBotSession({
     restore,
 
     async signOut(): Promise<OpenBotSessionState> {
+      currentTransport = undefined;
       const credential = await readCredential();
       return credential ? revoke(credential) : { kind: "signed-out" };
     },

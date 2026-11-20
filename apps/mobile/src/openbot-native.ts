@@ -40,6 +40,10 @@ export function configureOpenBotSession() {
     },
     request: async (url, init) => {
       const abort = new AbortController();
+      const signal = init.signal;
+      const cancel = () => abort.abort();
+      if (signal?.aborted) cancel();
+      else signal?.addEventListener("abort", cancel);
       const timer = setTimeout(() => abort.abort(), 12_000);
       try {
         const response = await fetch(url, { ...init, signal: abort.signal });
@@ -47,6 +51,7 @@ export function configureOpenBotSession() {
         const body = await response.text();
         return { ok: response.ok, status: response.status, json: async () => JSON.parse(body) };
       } finally {
+        signal?.removeEventListener("abort", cancel);
         clearTimeout(timer);
       }
     },

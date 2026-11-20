@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
+import { OpenBotAdapter } from "../../../packages/backends/src/openbot.ts";
+
 import { createOpenBotSession, type OpenBotSessionOptions } from "../src/openbot-session.ts";
 
 const apiOrigin = "https://openbot.test";
@@ -72,9 +74,13 @@ test("browser handoff verifies and restores the same Personal Workspace using a 
   });
 
   const connected = { kind: "connected", user: { id: "person-1", name: "Ada" } };
-  assert.deepEqual(await session.signIn(), connected);
+  const signedIn = await session.signIn();
+  assert.equal(signedIn.kind, "connected");
+  assert.deepEqual(signedIn.user, connected.user);
   assert.ok(stored());
-  assert.deepEqual(await session.restore(), connected);
+  const restored = await session.restore();
+  assert.equal(restored.kind, "connected");
+  assert.deepEqual(restored.user, connected.user);
 });
 
 test("a failed native sign-out remains pending and retries revocation before restoring identity", async () => {
@@ -134,4 +140,78 @@ test("temporary API failure preserves a session but a 401 requires a fresh brows
   assert.deepEqual(await session.restore(), { kind: "expired" });
   assert.equal(stored(), null);
   assert.deepEqual(await session.restore(), { kind: "signed-out" });
+});
+
+test("switching accounts invalidates A's in-flight history and B cannot open A's private Channel", async () => {
+  const cookieB = "better-auth.session_token=account-b.signature";
+  let exchanges = 0;
+  const privateChannel = {
+    id: "private-a",
+    name: "Private",
+    agentIds: ["bot"],
+    active: true,
+    threadId: "thread-a",
+    lastMessageAt: null,
+  };
+  let finishHistory: (response: Response) => void = () => {};
+  let startHistory: () => void = () => {};
+  const historyStarted = new Promise<void>((resolve) => {
+    startHistory = resolve;
+  });
+  const delayedHistory = new Promise<Response>((resolve) => {
+    finishHistory = resolve;
+  });
+  const { session } = fixture({
+    request: async (url, init) => {
+      assert.equal(new URL(url).origin, apiOrigin);
+      assert.equal(init.credentials, "omit");
+      assert.equal(init.redirect, "error");
+      const accountA = new Headers(init.headers).get("Cookie") === sessionCookie;
+      switch (new URL(url).pathname) {
+        case "/api/auth/openfuse/exchange":
+          return Response.json({ sessionCookie: ++exchanges === 1 ? sessionCookie : cookieB });
+        case "/api/me":
+          return Response.json({ user: { id: accountA ? "account-a" : "account-b" } });
+        case "/api/auth/sign-out":
+          return new Response(null, { status: 204 });
+        case "/api/channels":
+          return Response.json({ channels: accountA ? [privateChannel] : [], nextCursor: null });
+        case "/api/channels/private-a":
+          return accountA
+            ? Response.json({ channel: privateChannel })
+            : new Response(null, { status: 404 });
+        case "/api/copilotkit/threads/thread-a/messages":
+          if (!accountA) return new Response(null, { status: 403 });
+          startHistory();
+          return delayedHistory;
+        default:
+          throw new Error("Unexpected request");
+      }
+    },
+  });
+
+  const a = await session.signIn();
+  assert.equal(a.kind, "connected");
+  const adapterA = new OpenBotAdapter({ enabled: true, transport: a.transport });
+  const {
+    conversations: [listed],
+  } = await adapterA.listConversations({});
+  assert.ok(listed);
+  const pending = assert.rejects(adapterA.openConversation(listed.channelId), { status: 401 });
+  await historyStarted;
+  await session.signOut();
+
+  const b = await session.signIn();
+  assert.equal(b.kind, "connected");
+  const adapterB = new OpenBotAdapter({ enabled: true, transport: b.transport });
+  assert.deepEqual(await adapterB.listConversations({}), { conversations: [], nextCursor: null });
+  await assert.rejects(adapterB.openConversation(listed.channelId), { status: 404 });
+  assert.equal(
+    (await b.transport.request("/api/copilotkit/threads/thread-a/messages?agentId=bot")).status,
+    403,
+  );
+  finishHistory(Response.json({ messages: [{ id: "1", role: "user", content: "Private" }] }));
+  await pending;
+  await assert.rejects(adapterA.listConversations({}), { status: 401 });
+  await assert.rejects(b.transport.request("//other.example/api/channels"));
 });

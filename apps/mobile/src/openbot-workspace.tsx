@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, AppState, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { OpenBotConversations } from "./openbot-conversations";
 import { configureOpenBotSession } from "./openbot-native";
 import type { OpenBotSessionState } from "./openbot-session";
 import { Button, Card, colors, ErrorNotice, s } from "./ui";
@@ -19,10 +20,8 @@ export function OpenBotWorkspace({ onOpenStandalone }: { onOpenStandalone: () =>
   });
 
   return (
-    <SafeAreaView
-      style={{ flex: 1, justifyContent: "center", backgroundColor: colors.canvas, padding: 24 }}
-    >
-      <View style={{ width: "100%", maxWidth: 420, gap: 18, alignSelf: "center" }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.canvas, padding: 24 }}>
+      <View style={{ flex: 1, width: "100%", maxWidth: 520, gap: 18, alignSelf: "center" }}>
         <Text accessibilityRole="header" style={s.title}>
           OpenBot workspace
         </Text>
@@ -77,6 +76,18 @@ function OpenBotSessionPanel({
     return () => subscription.remove();
   }, [connected, run]);
 
+  const onSessionExpired = useCallback(() => void run("restore"), [run]);
+  if (screen.kind === "connected") {
+    return (
+      <>
+        <Text style={s.muted}>Signed in as {screen.user.name || screen.user.id}</Text>
+        <OpenBotConversations transport={screen.transport} onSessionExpired={onSessionExpired} />
+        <Button onPress={() => void run("signOut")}>Sign out of OpenBot</Button>
+        <Button onPress={onOpenStandalone}>OpenFuse workspace</Button>
+      </>
+    );
+  }
+
   return (
     <>
       <Card>
@@ -97,11 +108,6 @@ function OpenBotSessionPanel({
             <Button primary onPress={() => void run(screen.action)}>
               Try again
             </Button>
-          </>
-        ) : screen.kind === "connected" ? (
-          <>
-            <Text style={s.muted}>Signed in as {screen.user.name || screen.user.id}</Text>
-            <Button onPress={() => void run("signOut")}>Sign out of OpenBot</Button>
           </>
         ) : (
           <>

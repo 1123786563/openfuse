@@ -10,7 +10,7 @@ export const OPENBOT_CONTRACT_REF = "a96d88c6fb75385842529d7db7d463f4a8c4a86e";
  */
 export interface OpenBotTransport {
   runtimeUrl: string;
-  request(path: string, init?: RequestInit): Promise<Response>;
+  request(path: string, init?: RequestInit): Promise<Pick<Response, "ok" | "status" | "json">>;
 }
 
 export type OpenBotErrorCode =
@@ -85,6 +85,49 @@ const navigationSchema = z.object({
 const channelSchema = z.object({
   channel: z.object({ id: nonempty, threadId: nonempty, agentIds: z.array(nonempty).min(1) }),
 });
+const channelListEntry = z.object({
+  id: nonempty.brand<"OpenBotChannelId">(),
+  name: nonempty,
+  active: z.boolean(),
+  agentIds: z.array(nonempty),
+  summary: z.string().nullish(),
+  opening: z.string().nullish(),
+});
+const channelPage = z.object({
+  channels: z.array(channelListEntry),
+  nextCursor: nonempty.nullable(),
+});
+const openedChannel = z.object({
+  channel: channelListEntry.pick({ id: true, active: true, agentIds: true }).extend({
+    threadId: nonempty.brand<"OpenBotThreadId">(),
+    lastMessageAt: z.string().nullable(),
+  }),
+});
+const userContent = z.union([
+  z.string(),
+  z.array(
+    z.discriminatedUnion("type", [
+      z.object({ type: z.literal("text"), text: z.string() }),
+      z.object({ type: z.literal("image") }),
+      z.object({ type: z.literal("audio") }),
+      z.object({ type: z.literal("video") }),
+      z.object({ type: z.literal("document") }),
+    ]),
+  ),
+]);
+const threadHistory = z.object({
+  messages: z.array(
+    z.discriminatedUnion("role", [
+      z.object({ id: nonempty, role: z.literal("user"), content: userContent }),
+      z.object({ id: nonempty, role: z.literal("assistant"), content: z.string().nullish() }),
+      z.object({
+        id: nonempty,
+        role: z.enum(["tool", "system", "developer", "activity", "reasoning"]),
+      }),
+    ]),
+  ),
+});
+export type OpenBotChannelId = z.infer<typeof channelListEntry>["id"];
 const errorSchema = z.object({ error: z.string().optional(), rule: z.string().optional() });
 
 export type OpenBotComputerStatus = z.infer<typeof computerStatusSchema>;
@@ -148,6 +191,86 @@ export class OpenBotAdapter {
       if (error.code === "authentication_required") return { state: "authentication_required" };
       return { state: "unavailable", reason: error.message };
     }
+  }
+
+  async listConversations({ cursor, signal }: { cursor?: string; signal?: AbortSignal }) {
+    const query = new URLSearchParams({ limit: "30" });
+    if (cursor !== undefined) query.set("cursor", cursor);
+    const page = await this.json(`/api/channels?${query}`, channelPage, { signal });
+    return {
+      conversations: page.channels
+        .filter((channel) => channel.active && channel.agentIds.length === 1)
+        .map((channel) => ({
+          channelId: channel.id,
+          title: channel.summary || channel.opening || channel.name,
+        })),
+      nextCursor: page.nextCursor,
+    };
+  }
+
+  async openConversation(channelId: OpenBotChannelId, signal?: AbortSignal) {
+    const id = identifier(channelId);
+    const channel = await this.readDirectChannel(id, signal);
+    const { messages } = await this.json(
+      `/api/copilotkit/threads/${encodeURIComponent(identifier(channel.threadId))}/messages?agentId=${encodeURIComponent(identifier(channel.agentId))}`,
+      threadHistory,
+      { signal },
+    ).catch(async (error: unknown) => {
+      if (!(error instanceof OpenBotError) || error.status !== 404) throw error;
+      const current = await this.readDirectChannel(id, signal);
+      // Intelligence creates the Thread on its first run. Confirm the mapping survived the
+      // history request, and report an error if the Channel already has recorded activity.
+      if (
+        error.message === "Failed to fetch thread messages" &&
+        channel.threadId === current.threadId &&
+        channel.agentId === current.agentId &&
+        channel.lastMessageAt === null &&
+        current.lastMessageAt === null
+      ) {
+        return { messages: [] };
+      }
+      throw new OpenBotError("unavailable", "Could not load OpenBot conversation history.");
+    });
+    let hasNonTextMessages = false;
+    const transcript = messages.flatMap((message) => {
+      if (message.role !== "user" && message.role !== "assistant") {
+        hasNonTextMessages = true;
+        return [];
+      }
+      const { id, role, content } = message;
+      const text = Array.isArray(content)
+        ? content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n")
+        : content;
+      if (!text || (Array.isArray(content) && content.some((part) => part.type !== "text"))) {
+        hasNonTextMessages = true;
+      }
+      return text ? [{ id, role, text }] : [];
+    });
+    return {
+      channelId: channel.id,
+      threadId: channel.threadId,
+      messages: transcript,
+      hasNonTextMessages,
+    };
+  }
+
+  private async readDirectChannel(id: string, signal?: AbortSignal) {
+    const { channel } = await this.json(`/api/channels/${encodeURIComponent(id)}`, openedChannel, {
+      signal,
+    }).catch((error: unknown) => {
+      if (error instanceof OpenBotError && error.status === 404) {
+        throw new OpenBotError("refused", "This OpenBot conversation is unavailable.", 404);
+      }
+      throw error;
+    });
+    if (channel.id !== id) {
+      throw new OpenBotError("invalid_response", "OpenBot returned a different Channel.");
+    }
+    const [agentId] = channel.agentIds;
+    if (!channel.active || channel.agentIds.length !== 1 || !agentId) {
+      throw new OpenBotError("refused", "This OpenBot conversation is unavailable.");
+    }
+    return { ...channel, agentId };
   }
 
   async createConversation(agentId: string, signal?: AbortSignal) {
@@ -262,7 +385,7 @@ export class OpenBotAdapter {
     const transport = this.requireTransport();
     if (init.signal?.aborted)
       throw new OpenBotError("cancelled", "OpenBot request cancelled before dispatch.");
-    let response: Response;
+    let response: Awaited<ReturnType<OpenBotTransport["request"]>>;
     try {
       response = await transport.request(path, {
         ...init,
