@@ -28,7 +28,9 @@ Set `EXPO_PUBLIC_OPENBOT_API_ORIGIN` to the HTTPS origin of an OpenBot API
 that supports the OpenFuse sign-in handoff. For a native development build,
 the client also accepts local HTTP origins such as `http://127.0.0.1:3001`
 on an iOS simulator or `http://10.0.2.2:3001` on an Android emulator where
-the build permits cleartext traffic.
+the build permits cleartext traffic. If OpenBot Web uses a separate origin,
+set `EXPO_PUBLIC_OPENBOT_WEB_ORIGIN` to that deployment's Web origin. The
+approval link opens the system browser and uses the browser's OpenBot session.
 
 Rebuild the native app to include the browser and SecureStore modules.
 Choose **OpenBot workspace** and sign in through the system browser. The

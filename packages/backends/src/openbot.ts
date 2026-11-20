@@ -128,6 +128,15 @@ const threadHistory = z.object({
   ),
 });
 export type OpenBotChannelId = z.infer<typeof channelListEntry>["id"];
+type OpenBotThreadId = z.infer<typeof openedChannel>["channel"]["threadId"];
+const approvalInbox = z.object({
+  requests: z.array(
+    z.object({
+      status: nonempty,
+      action: z.object({ threadId: z.string() }),
+    }),
+  ),
+});
 const errorSchema = z.object({ error: z.string().optional(), rule: z.string().optional() });
 
 export type OpenBotComputerStatus = z.infer<typeof computerStatusSchema>;
@@ -252,6 +261,13 @@ export class OpenBotAdapter {
       messages: transcript,
       hasNonTextMessages,
     };
+  }
+
+  async hasPendingApproval(threadId: OpenBotThreadId, signal?: AbortSignal) {
+    const { requests } = await this.json("/api/approvals", approvalInbox, { signal });
+    return requests.some(
+      (request) => request.status === "pending" && request.action.threadId === threadId,
+    );
   }
 
   private async readDirectChannel(id: string, signal?: AbortSignal) {

@@ -9,11 +9,15 @@ export function configureOpenBotSession() {
   if (!configuredOrigin) return null;
 
   const apiOrigin = parseOpenBotOrigin(configuredOrigin, __DEV__);
+  const webOrigin = parseOpenBotOrigin(
+    process.env.EXPO_PUBLIC_OPENBOT_WEB_ORIGIN || apiOrigin,
+    __DEV__,
+  );
   const key = async () => {
     const digest = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, apiOrigin);
     return `openbot.session.${digest}`;
   };
-  return createOpenBotSession({
+  const session = createOpenBotSession({
     apiOrigin,
     storage: {
       read: async () => SecureStore.getItemAsync(await key()),
@@ -56,6 +60,7 @@ export function configureOpenBotSession() {
       }
     },
   });
+  return { ...session, webOrigin };
 }
 
 async function randomHex() {

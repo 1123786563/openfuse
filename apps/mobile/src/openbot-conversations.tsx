@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, ScrollView, Text, View } from "react-native";
 import type { OpenBotTransport } from "../../../packages/backends/src/openbot";
 import { OpenBotAdapter, OpenBotError } from "../../../packages/backends/src/openbot";
 import { AssistantResponse } from "./assistant-response";
+import { OpenBotApprovalStatus } from "./openbot-approval-status";
 import { Button, colors, ErrorNotice, s } from "./ui";
 
 type Page = Awaited<ReturnType<OpenBotAdapter["listConversations"]>>;
@@ -16,12 +17,14 @@ function requiresSignIn(error: unknown) {
 
 export function OpenBotConversations({
   transport,
+  webOrigin,
   onSessionExpired,
 }: {
   transport: OpenBotTransport;
+  webOrigin: string;
   onSessionExpired: () => void;
 }) {
-  const [adapter] = useState(() => new OpenBotAdapter({ enabled: true, transport }));
+  const adapter = useMemo(() => new OpenBotAdapter({ enabled: true, transport }), [transport]);
   const [page, setPage] = useState<Page | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "failed">("loading");
   const [selected, setSelected] = useState<Conversation | null>(null);
@@ -88,6 +91,7 @@ export function OpenBotConversations({
       <OpenBotHistory
         key={selected.channelId}
         adapter={adapter}
+        webOrigin={webOrigin}
         conversation={selected}
         onBack={() => setSelected(null)}
         onAccessLost={onAccessLost}
@@ -147,12 +151,14 @@ export function OpenBotConversations({
 
 function OpenBotHistory({
   adapter,
+  webOrigin,
   conversation,
   onBack,
   onAccessLost,
   onSessionExpired,
 }: {
   adapter: OpenBotAdapter;
+  webOrigin: string;
   conversation: Conversation;
   onBack: () => void;
   onAccessLost: (channelId: Conversation["channelId"]) => void;
@@ -164,6 +170,7 @@ function OpenBotHistory({
 
   useEffect(() => {
     const controller = new AbortController();
+    setState({ kind: "loading" });
     void adapter.openConversation(channelId, controller.signal).then(
       (history) => {
         if (!controller.signal.aborted) setState({ kind: "ready", history });
@@ -195,7 +202,6 @@ function OpenBotHistory({
           <ErrorNotice error="Could not load conversation history." />
           <Button
             onPress={() => {
-              setState({ kind: "loading" });
               setAttempt((previous) => previous + 1);
             }}
           >
@@ -205,6 +211,15 @@ function OpenBotHistory({
       )}
       {state.kind === "ready" && (
         <ScrollView contentContainerStyle={{ gap: 14, paddingBottom: 12 }}>
+          <OpenBotApprovalStatus
+            adapter={adapter}
+            history={state.history}
+            webOrigin={webOrigin}
+            onSessionExpired={onSessionExpired}
+          />
+          <Button small onPress={() => setAttempt((previous) => previous + 1)}>
+            Refresh conversation
+          </Button>
           {state.history.messages.map((message) => (
             <View key={message.id} style={s.card}>
               <Text style={s.label}>{message.role === "user" ? "You" : "Bot"}</Text>
