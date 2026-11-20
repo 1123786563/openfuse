@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AppState, Linking, Text, View } from "react-native";
 import { type OpenBotAdapter, OpenBotError } from "../../../packages/backends/src/openbot";
+import { trackOpenBotApprovals } from "./openbot-approval-tracking";
 import { openBotConversationUrl } from "./openbot-conversation-url";
 import { Button, ErrorNotice, s } from "./ui";
 
@@ -29,27 +30,20 @@ export function OpenBotApprovalStatus({
   useEffect(() => {
     const controller = new AbortController();
     let checking = false;
-    const observed = new Set<string>();
+    const track = trackOpenBotApprovals();
     async function refresh() {
       if (checking || controller.signal.aborted) return;
       checking = true;
       try {
         const requests = await adapter.listUnsettledApprovals(threadId, controller.signal);
         if (controller.signal.aborted) return;
-        const current = new Set(requests.map(({ id }) => id));
-        for (const id of current) observed.add(id);
-        const settled = [...observed].filter((id) => !current.has(id));
-        const pending = requests.some(({ status }) => status === "pending");
-        setStatus(pending ? "pending" : observed.size ? "continuing" : "clear");
-        if (
-          settled.length &&
-          AppState.currentState === "active" &&
-          (await refreshConversation()) &&
-          !controller.signal.aborted
-        ) {
-          for (const id of settled) observed.delete(id);
-          setStatus(pending ? "pending" : observed.size ? "continuing" : "clear");
-        }
+        await track(
+          requests,
+          async () => AppState.currentState === "active" && (await refreshConversation()),
+          (status) => {
+            if (!controller.signal.aborted) setStatus(status);
+          },
+        );
       } catch (error) {
         if (controller.signal.aborted) return;
         if (error instanceof OpenBotError && error.code === "authentication_required") {

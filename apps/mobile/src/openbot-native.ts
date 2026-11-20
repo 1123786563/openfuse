@@ -2,17 +2,14 @@ import { fetch } from "expo/fetch";
 import * as Crypto from "expo-crypto";
 import * as SecureStore from "expo-secure-store";
 import * as WebBrowser from "expo-web-browser";
-import { createOpenBotSession, openBotRedirectUri, parseOpenBotOrigin } from "./openbot-session";
+import { createOpenBotSession, openBotRedirectUri, parseOpenBotOrigins } from "./openbot-session";
 
 export function configureOpenBotSession() {
-  const configuredOrigin = process.env.EXPO_PUBLIC_OPENBOT_API_ORIGIN;
-  if (!configuredOrigin) return null;
-
-  const apiOrigin = parseOpenBotOrigin(configuredOrigin, __DEV__);
-  const webOrigin = parseOpenBotOrigin(
-    process.env.EXPO_PUBLIC_OPENBOT_WEB_ORIGIN || apiOrigin,
-    __DEV__,
-  );
+  const { apiOrigin, webOrigin } = parseOpenBotOrigins({
+    api: process.env.EXPO_PUBLIC_OPENBOT_API_ORIGIN,
+    web: process.env.EXPO_PUBLIC_OPENBOT_WEB_ORIGIN,
+    allowLocalHttp: __DEV__,
+  });
   const key = async () => {
     const digest = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, apiOrigin);
     return `openbot.session.${digest}`;

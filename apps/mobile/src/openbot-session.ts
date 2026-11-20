@@ -51,6 +51,29 @@ export function parseOpenBotOrigin(value: string, allowLocalHttp = false) {
   return url.origin;
 }
 
+export function parseOpenBotOrigins({
+  api,
+  web,
+  allowLocalHttp = false,
+}: {
+  api?: string;
+  web?: string;
+  allowLocalHttp?: boolean;
+}) {
+  function parse(value: string | undefined, setting: string) {
+    try {
+      return parseOpenBotOrigin(value ?? "", allowLocalHttp);
+    } catch {
+      throw new Error(`Set a valid OpenBot origin in ${setting}.`);
+    }
+  }
+  const apiOrigin = parse(api, "EXPO_PUBLIC_OPENBOT_API_ORIGIN");
+  return {
+    apiOrigin,
+    webOrigin: web ? parse(web, "EXPO_PUBLIC_OPENBOT_WEB_ORIGIN") : apiOrigin,
+  };
+}
+
 export function createOpenBotSession({
   apiOrigin,
   storage,

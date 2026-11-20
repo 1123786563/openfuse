@@ -4,6 +4,7 @@ import {
   type OpenBotAdapter,
   OpenBotError,
   type OpenBotTransport,
+  openBotHttpErrorCode,
 } from "../../../packages/backends/src/openbot";
 
 export type OpenBotHistory = Awaited<ReturnType<OpenBotAdapter["openConversation"]>>;
@@ -13,7 +14,20 @@ export type OpenBotSend = { id: string; text: string };
 const connection = z.object({
   threadId: z.string().min(1),
   runId: z.string().min(1).nullish(),
+  realtime: z.object({ clientUrl: z.string() }).optional(),
 });
+
+const runtimeInfo = z.object({ intelligence: z.object({ wsUrl: z.string() }).optional() });
+
+function requireDirectGateway(target: string, runtimeUrl: string) {
+  const socket = new URL(target, runtimeUrl);
+  if (socket.pathname.replace(/\/$/, "") === "/api/intelligence/client") {
+    throw new OpenBotError(
+      "unsupported_gateway",
+      "OpenFuse requires a direct Intelligence gateway. Disable INTELLIGENCE_GATEWAY_PROXY on OpenBot and configure a gateway the device can reach.",
+    );
+  }
+}
 
 export async function stopOpenBotRun({
   history,
@@ -40,12 +54,7 @@ export async function stopOpenBotRun({
     },
   );
   if (!response.ok) {
-    const code =
-      response.status === 401
-        ? "authentication_required"
-        : response.status === 403 || response.status === 404
-          ? "refused"
-          : "http_error";
+    const code = response.status === 404 ? "refused" : openBotHttpErrorCode(response.status);
     throw new OpenBotError(code, "OpenBot could not stop the run.", response.status);
   }
 }
@@ -57,6 +66,7 @@ export async function observeOpenBotRun({
   send,
   onMessages,
   onRun,
+  onSendDispatch,
 }: {
   history: OpenBotHistory;
   transport: OpenBotTransport;
@@ -64,6 +74,7 @@ export async function observeOpenBotRun({
   send?: OpenBotSend;
   onMessages: (messages: TextMessage[]) => void;
   onRun: (runId: string | null) => void;
+  onSendDispatch?: () => void;
 }) {
   const request = transport.requestRuntime;
   if (!request) throw new OpenBotError("not_configured", "OpenBot runtime is unavailable.");
@@ -91,22 +102,33 @@ export async function observeOpenBotRun({
     fetch: async (url, init) => {
       try {
         if (signal.aborted) throw new OpenBotError("cancelled", "OpenBot observation ended.");
+        const target = new URL(url);
+        if (send && init.method === "POST" && target.pathname.endsWith("/run")) {
+          onSendDispatch?.();
+        }
         const response = await request(url, { ...init, signal });
         if (signal.aborted) throw new OpenBotError("cancelled", "OpenBot observation ended.");
         if (!response.ok) {
-          const code =
-            response.status === 401
-              ? "authentication_required"
-              : response.status === 403
-                ? "refused"
-                : "http_error";
-          throw new OpenBotError(code, "OpenBot could not open the run.", response.status);
+          throw new OpenBotError(
+            openBotHttpErrorCode(response.status),
+            "OpenBot could not open the run.",
+            response.status,
+          );
         }
+        if (target.href === `${transport.runtimeUrl}/info`) {
+          const info = runtimeInfo.parse(await response.clone().json());
+          if (info.intelligence)
+            requireDirectGateway(info.intelligence.wsUrl, transport.runtimeUrl);
+        }
+
         if (init.method === "POST" && response.status !== 204) {
           const joined = connection.parse(await response.clone().json());
           if (signal.aborted) throw new OpenBotError("cancelled", "OpenBot observation ended.");
           if (joined.threadId !== history.threadId) {
             throw new OpenBotError("invalid_response", "OpenBot returned a different Thread.");
+          }
+          if (joined.realtime) {
+            requireDirectGateway(joined.realtime.clientUrl, transport.runtimeUrl);
           }
           if (joined.runId) onRun(joined.runId);
         }

@@ -3,7 +3,11 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import { OpenBotAdapter } from "../../../packages/backends/src/openbot.ts";
 
-import { createOpenBotSession, type OpenBotSessionOptions } from "../src/openbot-session.ts";
+import {
+  createOpenBotSession,
+  type OpenBotSessionOptions,
+  parseOpenBotOrigins,
+} from "../src/openbot-session.ts";
 
 const apiOrigin = "https://openbot.test";
 const redirectUri = "openfuse://auth/callback";
@@ -302,4 +306,19 @@ test("the native session can create a direct Conversation and rejects unrelated 
     connected.transport.request("/api/approvals", { method: "POST", body: "{}" }),
     /Invalid OpenBot workspace request/,
   );
+});
+
+test("configuration names the invalid origin and falls back to API for an unset Web origin", () => {
+  assert.throws(
+    () => parseOpenBotOrigins({ api: "invalid", web: "https://web.test" }),
+    /EXPO_PUBLIC_OPENBOT_API_ORIGIN/,
+  );
+  assert.throws(
+    () => parseOpenBotOrigins({ api: "https://api.test", web: "invalid" }),
+    /EXPO_PUBLIC_OPENBOT_WEB_ORIGIN/,
+  );
+  assert.deepEqual(parseOpenBotOrigins({ api: "https://api.test" }), {
+    apiOrigin: "https://api.test",
+    webOrigin: "https://api.test",
+  });
 });

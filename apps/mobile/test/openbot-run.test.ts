@@ -310,3 +310,52 @@ test("a Web stop leaves the mobile observer with saved history and no failed run
   assert.deepEqual(runIds, ["web-run", null]);
   assert.deepEqual(transcript, [[], [saved.content]]);
 });
+
+test("the native client identifies both gateway proxy configurations before starting a run", async () => {
+  const signal = new AbortController().signal;
+  for (const wsUrl of ["/api/intelligence/client", "wss://openbot.test/api/intelligence/client"]) {
+    const transport = {
+      runtimeUrl,
+      async request(path: string) {
+        if (path.startsWith("/api/channels?"))
+          return Response.json({
+            channels: [{ id: "channel", name: "Bot", active: true, agentIds: ["bot"] }],
+            nextCursor: null,
+          });
+        if (path === "/api/channels/channel")
+          return Response.json({
+            channel: {
+              id: "channel",
+              name: "Bot",
+              active: true,
+              agentIds: ["bot"],
+              threadId: "thread",
+              lastMessageAt: null,
+            },
+          });
+        return Response.json({ messages: [] });
+      },
+      async requestRuntime(url: string) {
+        assert.equal(url, `${runtimeUrl}/info`);
+        return Response.json({ mode: "intelligence", intelligence: { wsUrl } });
+      },
+    };
+    const adapter = new OpenBotAdapter({ enabled: true, transport });
+    const {
+      conversations: [channel],
+    } = await adapter.listConversations({});
+    assert.ok(channel);
+    const history = await adapter.openConversation(channel.channelId);
+    await assert.rejects(
+      observeOpenBotRun({
+        history,
+        transport,
+        signal,
+        send: outgoing,
+        onMessages() {},
+        onRun() {},
+      }),
+      { code: "unsupported_gateway" },
+    );
+  }
+});

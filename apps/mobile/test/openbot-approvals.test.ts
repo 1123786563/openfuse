@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { OpenBotAdapter } from "../../../packages/backends/src/openbot.ts";
+import { trackOpenBotApprovals } from "../src/openbot-approval-tracking.ts";
+
 import { openBotConversationUrl } from "../src/openbot-conversation-url.ts";
 
 test("the opened Thread tracks an approval until its continuation completes", async () => {
@@ -92,4 +94,24 @@ test("Web links use the verified deployment and keep the Channel ID in one path 
   assert.throws(() =>
     openBotConversationUrl({ webOrigin: "file:///tmp/openbot", channelId: channel.channelId }),
   );
+});
+
+test("settled approvals refresh saved history and keep retrying after a failed refresh", async () => {
+  for (const decision of ["approved", "denied"] as const) {
+    const statuses: string[] = [];
+    const monitor = trackOpenBotApprovals();
+    const emit = (status: string) => statuses.push(status);
+    let attempts = 0;
+    const read = async () => ++attempts > 1;
+    await monitor([{ id: "approval", status: "pending" }], read, emit);
+    await monitor([{ id: "approval", status: decision }], read, emit);
+    assert.equal(attempts, 0);
+    await monitor([], read, emit);
+    assert.equal(statuses.at(-1), "continuing");
+    await monitor([], read, emit);
+    assert.equal(attempts, 2);
+    assert.equal(statuses.at(-1), "clear");
+    await monitor([], read, emit);
+    assert.equal(attempts, 2);
+  }
 });

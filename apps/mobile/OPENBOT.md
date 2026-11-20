@@ -1,5 +1,7 @@
 # OpenBot connected mode on mobile
 
+Use the [companion OpenBot revision `a2376497`](https://github.com/1123786563/OpenBot/tree/a23764974e532bdfd97fa3916e519a8719b21781), which provides native session exchange and Thread-scoped approvals. It uses CopilotKit runtime 1.85.0. Configure OpenBot to advertise a direct Intelligence WebSocket gateway reachable from the device. Set `INTELLIGENCE_GATEWAY_PROXY=off`. If the default gateway is private, set `INTELLIGENCE_BROWSER_GATEWAY_WS_URL` to a device-reachable gateway. OpenBot's browser proxy requires a browser session on the WebSocket connection. OpenFuse reports that configuration before starting a new Bot run.
+
 Set `EXPO_PUBLIC_OPENBOT_API_ORIGIN` to the OpenBot API origin before building the native app. Set `EXPO_PUBLIC_OPENBOT_WEB_ORIGIN` if the Web app runs on a different origin. Both use HTTPS. Development builds also accept HTTP on the supported loopback hosts.
 
 In the native app, select **OpenBot workspace** and sign in through the browser. The OpenBot server must support the OpenFuse authorization and code exchange endpoints and the `openfuse://auth/callback` redirect. OpenFuse keeps the per-user session in Expo SecureStore.

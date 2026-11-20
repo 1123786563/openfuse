@@ -6,16 +6,22 @@ import { configureOpenBotSession } from "./openbot-native";
 import type { OpenBotSessionState } from "./openbot-session";
 import { Button, Card, colors, ErrorNotice, s } from "./ui";
 
-type Session = NonNullable<ReturnType<typeof configureOpenBotSession>>;
+type Session = ReturnType<typeof configureOpenBotSession>;
+type Configuration =
+  | { kind: "configured"; session: Session }
+  | { kind: "invalid"; message: string };
 type Action = "restore" | "signIn" | "signOut";
 type Screen = { kind: "loading" } | { kind: "retry"; action: Action } | OpenBotSessionState;
 
 export function OpenBotWorkspace({ onOpenStandalone }: { onOpenStandalone: () => void }) {
-  const [session] = useState(() => {
+  const [configuration] = useState<Configuration>(() => {
     try {
-      return configureOpenBotSession();
-    } catch {
-      return null;
+      return { kind: "configured", session: configureOpenBotSession() };
+    } catch (error) {
+      return {
+        kind: "invalid",
+        message: error instanceof Error ? error.message : "Could not configure OpenBot.",
+      };
     }
   });
 
@@ -25,11 +31,14 @@ export function OpenBotWorkspace({ onOpenStandalone }: { onOpenStandalone: () =>
         <Text accessibilityRole="header" style={s.title}>
           OpenBot workspace
         </Text>
-        {session ? (
-          <OpenBotSessionPanel session={session} onOpenStandalone={onOpenStandalone} />
+        {configuration.kind === "configured" ? (
+          <OpenBotSessionPanel
+            session={configuration.session}
+            onOpenStandalone={onOpenStandalone}
+          />
         ) : (
           <>
-            <ErrorNotice error="Set a valid OpenBot API origin in EXPO_PUBLIC_OPENBOT_API_ORIGIN." />
+            <ErrorNotice error={configuration.message} />
             <Button onPress={onOpenStandalone}>OpenFuse workspace</Button>
           </>
         )}

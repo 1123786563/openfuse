@@ -1,7 +1,7 @@
 import { MessageSchema } from "@ag-ui/core";
 import { z } from "zod";
 
-/** Verified against OpenBot a96d88c6 and its public CopilotKit runtime 1.70.1. */
+/** Original adapter contract reference. See mobile/OPENBOT.md for connected-mode requirements. */
 export const OPENBOT_CONTRACT_REF = "a96d88c6fb75385842529d7db7d463f4a8c4a86e";
 
 /**
@@ -18,6 +18,7 @@ export interface OpenBotTransport {
 export type OpenBotErrorCode =
   | "disabled"
   | "not_configured"
+  | "unsupported_gateway"
   | "invalid_input"
   | "invalid_response"
   | "authentication_required"
@@ -25,6 +26,17 @@ export type OpenBotErrorCode =
   | "http_error"
   | "unavailable"
   | "cancelled";
+
+export function openBotHttpErrorCode(status: number): OpenBotErrorCode {
+  switch (status) {
+    case 401:
+      return "authentication_required";
+    case 403:
+      return "refused";
+    default:
+      return "http_error";
+  }
+}
 
 export class OpenBotError extends Error {
   constructor(
@@ -450,14 +462,8 @@ export class OpenBotAdapter {
     const body: unknown = await response.json().catch(() => undefined);
     if (!response.ok) {
       const detail = errorSchema.safeParse(body);
-      const code =
-        response.status === 401
-          ? "authentication_required"
-          : response.status === 403
-            ? "refused"
-            : "http_error";
       throw new OpenBotError(
-        code,
+        openBotHttpErrorCode(response.status),
         detail.success && detail.data.error
           ? detail.data.error.slice(0, 1000)
           : `OpenBot request failed (${response.status}).`,
