@@ -99,7 +99,13 @@ export function useFuseThread() {
   if (!context) throw new Error("Threads provider is unavailable");
   return context;
 }
-export function ThreadsSheet({ onClose }: { onClose: () => void }) {
+export function ThreadsSheet({
+  onClose,
+  onChooseWorkspace,
+}: {
+  onClose: () => void;
+  onChooseWorkspace?: () => void;
+}) {
   const {
     enabled,
     selection,
@@ -137,6 +143,7 @@ export function ThreadsSheet({ onClose }: { onClose: () => void }) {
       onClose={onClose}
     >
       <View style={{ gap: 14 }}>
+        {onChooseWorkspace && <Button onPress={onChooseWorkspace}>Choose a workspace</Button>}
         {enabled && loading ? (
           <>
             <ErrorNotice error={mainError} />
