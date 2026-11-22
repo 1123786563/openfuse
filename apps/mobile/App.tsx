@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   AppState,
+  Platform,
   Pressable,
   ScrollView,
   Text,
@@ -37,6 +38,7 @@ import { ChatScreen, WorkspaceTools } from "./src/chat";
 import { ComputerEntry } from "./src/computer";
 import { ComputerDraftProvider } from "./src/computer-drafts";
 import { Details } from "./src/details";
+import { OpenBotWorkspace } from "./src/openbot-workspace";
 import { BrowserScreen, CalendarScreen, FilesScreen, MailScreen } from "./src/screens";
 import { ThreadsProvider, ThreadsSheet, useFuseThread } from "./src/threads";
 import { Button, Card, colors, ErrorNotice, Field, IconButton, Mascot, s } from "./src/ui";
@@ -67,6 +69,38 @@ const titles: Partial<Record<Section, { title: string; subtitle: string }>> = {
   files: { title: "Files", subtitle: "Documents, forms and filled copies." },
 };
 export default function App() {
+  const [mode, setMode] = useState<"choose" | "standalone" | "connected">(
+    Platform.OS === "web" ? "standalone" : "choose",
+  );
+  const chooseWorkspace = Platform.OS === "web" ? undefined : () => setMode("choose");
+  return (
+    <SafeAreaProvider>
+      <StatusBar style="dark" />
+      {mode === "standalone" ? (
+        <StandaloneWorkspace onChooseWorkspace={chooseWorkspace} />
+      ) : mode === "connected" ? (
+        <OpenBotWorkspace onOpenStandalone={() => setMode("standalone")} />
+      ) : (
+        <SafeAreaView
+          style={{ flex: 1, justifyContent: "center", backgroundColor: colors.canvas, padding: 24 }}
+        >
+          <View style={{ width: "100%", maxWidth: 420, gap: 18, alignSelf: "center" }}>
+            <Mascot size={72} />
+            <Text accessibilityRole="header" style={s.title}>
+              Choose a workspace
+            </Text>
+            <Button primary onPress={() => setMode("standalone")}>
+              OpenFuse workspace
+            </Button>
+            <Button onPress={() => setMode("connected")}>OpenBot workspace</Button>
+          </View>
+        </SafeAreaView>
+      )}
+    </SafeAreaProvider>
+  );
+}
+
+function StandaloneWorkspace({ onChooseWorkspace }: { onChooseWorkspace?: () => void }) {
   const [token, setToken] = useState("");
   const [accessKey, setAccessKey] = useState("");
   const [busy, setBusy] = useState(true);
@@ -86,62 +120,62 @@ export default function App() {
   useEffect(() => {
     void connect();
   }, [connect]);
-  return (
-    <SafeAreaProvider>
-      <StatusBar style="dark" />
-      {token ? (
-        <CopilotKitProvider
-          runtimeUrl={`${API_URL}/api/copilotkit`}
-          headers={{ Authorization: `Bearer ${token}` }}
-        >
-          <WorkspaceApp token={token} />
-        </CopilotKitProvider>
-      ) : (
-        <SafeAreaView
-          style={{
-            flex: 1,
-            backgroundColor: colors.canvas,
-            justifyContent: "center",
-            alignItems: "center",
-            padding: 24,
-          }}
-        >
-          <View style={{ width: "100%", maxWidth: 420, gap: 22, alignItems: "center" }}>
-            <Mascot size={72} />
-            <Text
-              style={{ fontSize: 32, color: colors.text, letterSpacing: -1, fontWeight: "500" }}
-            >
-              Welcome to OpenFuse.
+  return token ? (
+    <CopilotKitProvider
+      runtimeUrl={`${API_URL}/api/copilotkit`}
+      headers={{ Authorization: `Bearer ${token}` }}
+    >
+      <WorkspaceApp token={token} onChooseWorkspace={onChooseWorkspace} />
+    </CopilotKitProvider>
+  ) : (
+    <SafeAreaView
+      style={{
+        flex: 1,
+        backgroundColor: colors.canvas,
+        justifyContent: "center",
+        alignItems: "center",
+        padding: 24,
+      }}
+    >
+      <View style={{ width: "100%", maxWidth: 420, gap: 22, alignItems: "center" }}>
+        <Mascot size={72} />
+        <Text style={{ fontSize: 32, color: colors.text, letterSpacing: -1, fontWeight: "500" }}>
+          Welcome to OpenFuse.
+        </Text>
+        <Text style={[s.muted, { textAlign: "center" }]}>A little room for your day.</Text>
+        {busy ? (
+          <ActivityIndicator color={colors.blueDark} />
+        ) : (
+          <Card style={{ width: "100%" }}>
+            <ErrorNotice error={error} />
+            <Field
+              label="Workspace access key"
+              value={accessKey}
+              onChangeText={setAccessKey}
+              secureTextEntry
+              placeholder="Required for a live workspace"
+            />
+            <Button primary onPress={() => void connect(accessKey || undefined)}>
+              Open workspace
+            </Button>
+            <Text style={[s.small, { marginTop: 15 }]}>
+              Local workspaces open without a key. Make sure your OpenFuse server is running at{" "}
+              {API_URL}.
             </Text>
-            <Text style={[s.muted, { textAlign: "center" }]}>A little room for your day.</Text>
-            {busy ? (
-              <ActivityIndicator color={colors.blueDark} />
-            ) : (
-              <Card style={{ width: "100%" }}>
-                <ErrorNotice error={error} />
-                <Field
-                  label="Workspace access key"
-                  value={accessKey}
-                  onChangeText={setAccessKey}
-                  secureTextEntry
-                  placeholder="Required for a live workspace"
-                />
-                <Button primary onPress={() => void connect(accessKey || undefined)}>
-                  Open workspace
-                </Button>
-                <Text style={[s.small, { marginTop: 15 }]}>
-                  Local workspaces open without a key. Make sure your OpenFuse server is running at{" "}
-                  {API_URL}.
-                </Text>
-              </Card>
-            )}
-          </View>
-        </SafeAreaView>
-      )}
-    </SafeAreaProvider>
+          </Card>
+        )}
+        {onChooseWorkspace && <Button onPress={onChooseWorkspace}>Choose a workspace</Button>}
+      </View>
+    </SafeAreaView>
   );
 }
-function WorkspaceApp({ token }: { token: string }) {
+function WorkspaceApp({
+  token,
+  onChooseWorkspace,
+}: {
+  token: string;
+  onChooseWorkspace?: () => void;
+}) {
   const api = useMemo(() => new FuseApi(token), [token]);
   const [workspace, setWorkspace] = useState<Workspace>();
   const [section, setSection] = useState<Section>("chat");
@@ -205,6 +239,7 @@ function WorkspaceApp({ token }: { token: string }) {
             <Text style={s.muted}>Opening your workspace…</Text>
           </>
         )}
+        {onChooseWorkspace && <Button onPress={onChooseWorkspace}>Choose a workspace</Button>}
       </SafeAreaView>
     );
   return (
@@ -220,6 +255,7 @@ function WorkspaceApp({ token }: { token: string }) {
               clearToast={() => setToast("")}
               error={error}
               prompt={prompt}
+              onChooseWorkspace={onChooseWorkspace}
             />
           </ThreadsProvider>
         </ComputerDraftProvider>
@@ -233,12 +269,14 @@ function WorkspaceShell({
   clearToast,
   error,
   prompt,
+  onChooseWorkspace,
 }: {
   detail?: Detail;
   toast: string;
   clearToast: () => void;
   error: string;
   prompt?: { id: number; text: string };
+  onChooseWorkspace?: () => void;
 }) {
   const { workspace, section, navigate, open } = useWorkspace();
   const { data } = useAgentWorkspace();
@@ -501,7 +539,12 @@ function WorkspaceShell({
             </View>
           </View>
         )}
-        {threadsOpen && <ThreadsSheet onClose={() => setThreadsOpen(false)} />}
+        {threadsOpen && (
+          <ThreadsSheet
+            onClose={() => setThreadsOpen(false)}
+            onChooseWorkspace={onChooseWorkspace}
+          />
+        )}
         {detail && (
           <Details
             key={

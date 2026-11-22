@@ -12,6 +12,7 @@
     "web": { "bundler": "metro", "name": "OpenFuse — a little room for everything" },
     "plugins": [
       "expo-document-picker",
+      "expo-secure-store",
       "@config-plugins/react-native-blob-util",
       "@config-plugins/react-native-pdf"
     ]

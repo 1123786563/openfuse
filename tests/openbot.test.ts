@@ -244,3 +244,180 @@ test("uncertain mutations require reconciliation after transport, server or inva
     assert.equal(calls.length, 1);
   }
 });
+
+test("list follows opaque cursors even when a page contains no supported conversations", async () => {
+  const cursor = "opaque+/= next";
+  const { adapter, calls } = fixture((path) =>
+    Response.json(
+      new URL(path, "https://openbot.test").searchParams.has("cursor")
+        ? {
+            channels: [
+              {
+                id: "channel-1",
+                name: "Bot",
+                summary: "Saved conversation",
+                active: true,
+                agentIds: ["bot-1"],
+                threadId: "listed-thread",
+              },
+            ],
+            nextCursor: null,
+          }
+        : {
+            channels: [
+              { id: "group", name: "Group", active: true, agentIds: ["a", "b"] },
+              { id: "inactive", name: "Inactive", active: false, agentIds: ["a"] },
+            ],
+            nextCursor: cursor,
+          },
+    ),
+  );
+
+  assert.deepEqual(await adapter.listConversations({}), { conversations: [], nextCursor: cursor });
+  assert.deepEqual(await adapter.listConversations({ cursor }), {
+    conversations: [{ channelId: "channel-1", title: "Saved conversation" }],
+    nextCursor: null,
+  });
+  assert.equal(calls[0]?.path, "/api/channels?limit=30");
+  assert.equal(new URL(calls[1].path, "https://openbot.test").searchParams.get("cursor"), cursor);
+});
+
+test("opening a Channel reads its current account Thread and distinguishes failure from empty history", async () => {
+  let history: Response = new Response(null, { status: 503 });
+  const url = "/api/copilotkit/threads/current%2Fthread/messages?agentId=bot%2F1";
+  const { adapter, calls } = fixture((path) => {
+    if (path === "/api/channels?limit=30") {
+      return Response.json({
+        channels: [
+          {
+            id: "channel/1",
+            name: "Bot",
+            active: true,
+            agentIds: ["bot/1"],
+            threadId: "stale-thread",
+          },
+        ],
+        nextCursor: null,
+      });
+    }
+    if (path === "/api/channels/channel%2F1") {
+      return Response.json({
+        channel: {
+          id: "channel/1",
+          name: "Bot",
+          active: true,
+          threadId: "current/thread",
+          lastMessageAt: null,
+          agentIds: ["bot/1"],
+        },
+      });
+    }
+    assert.equal(path, url);
+    return history;
+  });
+  const {
+    conversations: [listed],
+  } = await adapter.listConversations({});
+  assert.ok(listed);
+  const { channelId } = listed;
+  await assert.rejects(adapter.openConversation(channelId), { status: 503 });
+  history = Response.json({ messages: [] });
+  assert.deepEqual(await adapter.openConversation(channelId), {
+    channelId: "channel/1",
+    threadId: "current/thread",
+    agentId: "bot/1",
+    runMessages: [],
+    messages: [],
+    hasNonTextMessages: false,
+  });
+  history = Response.json({
+    messages: [
+      {
+        id: "1",
+        role: "user",
+        content: [
+          { type: "text", text: "Saved question" },
+          { type: "image", source: { type: "url", value: "https://openbot.test/image" } },
+        ],
+      },
+      {
+        id: "2",
+        role: "assistant",
+        content: null,
+        toolCalls: [{ id: "t", type: "function", function: { name: "tool", arguments: "{}" } }],
+      },
+      { id: "3", role: "assistant", content: "Saved answer" },
+    ],
+  });
+  const conversation = await adapter.openConversation(channelId);
+  assert.deepEqual(conversation.messages, [
+    { id: "1", role: "user", text: "Saved question" },
+    { id: "3", role: "assistant", text: "Saved answer" },
+  ]);
+  assert.deepEqual(conversation.runMessages?.[0], {
+    id: "1",
+    role: "user",
+    content: [
+      { type: "text", text: "Saved question" },
+      { type: "image", source: { type: "url", value: "https://openbot.test/image" } },
+    ],
+  });
+  assert.equal(conversation.hasNonTextMessages, true);
+  assert.deepEqual(
+    calls.map(({ path }) => path),
+    [
+      "/api/channels?limit=30",
+      "/api/channels/channel%2F1",
+      url,
+      "/api/channels/channel%2F1",
+      url,
+      "/api/channels/channel%2F1",
+      url,
+    ],
+  );
+});
+
+test("a runtime 404 is empty only while an unstarted Channel is still accessible", async () => {
+  let lastMessageAt: string | null = null;
+  let revokeOnHistory = false;
+  let revoked = false;
+  const { adapter } = fixture((path) => {
+    const channel = {
+      id: "new-channel",
+      name: "Bot",
+      active: true,
+      threadId: "new-thread",
+      agentIds: ["bot"],
+      lastMessageAt,
+    };
+    if (path.startsWith("/api/channels?")) {
+      return Response.json({ channels: [channel], nextCursor: null });
+    }
+    if (path === "/api/channels/new-channel") {
+      return revoked ? new Response(null, { status: 404 }) : Response.json({ channel });
+    }
+    assert.equal(path, "/api/copilotkit/threads/new-thread/messages?agentId=bot");
+    revoked = revokeOnHistory;
+    return Response.json({ error: "Failed to fetch thread messages" }, { status: 404 });
+  });
+
+  const {
+    conversations: [listed],
+  } = await adapter.listConversations({});
+  assert.ok(listed);
+  assert.deepEqual((await adapter.openConversation(listed.channelId)).messages, []);
+  lastMessageAt = "2026-11-20T00:00:00.000Z";
+  await assert.rejects(adapter.openConversation(listed.channelId), { code: "unavailable" });
+  lastMessageAt = null;
+  revokeOnHistory = true;
+  await assert.rejects(adapter.openConversation(listed.channelId), { code: "refused" });
+});
+
+test("lists the signed-in account's visible Bots from the default agents endpoint", async () => {
+  const { adapter } = fixture((path, init) => {
+    assert.equal(path, "/api/agents");
+    assert.equal(init.method, "GET");
+    return Response.json({ agents: [{ id: "bot-7", name: "Research", description: "Notes" }] });
+  });
+  assert.deepEqual(await adapter.listBots(), [{ id: "bot-7", name: "Research" }]);
+});
